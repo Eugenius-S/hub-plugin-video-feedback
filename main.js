@@ -1,7 +1,7 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
 // расшифровка по фразам и кадры экрана в моменты, о которых говорил. Само видео нигде не пишется: на диск ложатся
 // только эти кадры, как вставленные картинки. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
-import { FRAMES, KEEP_DAYS, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
+import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
 
 const COUNT = 3;
 const EDGE = 1568, PIXELS = 1.15e6;   // больше этого модель кадр всё равно уменьшит: лишнее — только вес файла
@@ -130,7 +130,7 @@ function record() {
     r.voiceCut = phrases(VOICE);
     r.voiceCut.begin(0);
     r.piece = piece(r.mic);
-    r.whole = piece(r.mic);   // весь звук записи одним файлом: хаб хранит его 7 дней — расшифровать позже, если не вышло
+    r.whole = piece(r.mic);   // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки (владелец 15.10)
   }
   // таймер — в отдельном потоке: вкладка хаба во время записи обычно не на виду, и её таймеры браузер притормаживает
   r.worker = new Worker(hubRef.url("tick.js"));
@@ -276,11 +276,11 @@ async function stop() {
       metas.push({ ...meta, label: `Image #${i + 1}` });
     }
     let audio = null;
-    if (whole && r.list.length) {
+    if (whole && r.list.some((p) => !p.text)) {   // всё расшифровалось — звук не нужен
       try {
         const b = await whole;
         const up = await hubRef.post("/api/upload", { name: `voice-${new Date().toTimeString().slice(0, 5).replace(":", "-")}.webm`,
-          mime: b.type || "audio/webm", data: await base64(b), keep_days: KEEP_DAYS });
+          mime: b.type || "audio/webm", data: await base64(b) });
         audio = up?.data?.path || null;
       } catch { /* без звука — фразы и кадры всё равно уйдут */ }
     }
