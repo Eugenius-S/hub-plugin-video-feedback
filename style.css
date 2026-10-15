@@ -1,0 +1,14 @@
+/* Видео-фидбэк: значок рядом с микрофоном; отсчёт, идёт запись (точка и время), расшифровка */
+.vf-btn .icon { width: 22px; height: 22px; }
+.btn.round.vf-btn.vf-count { color: var(--primary); }
+.vf-num { font: 600 var(--text-md, 16px)/1 var(--font-ui, inherit); font-variant-numeric: tabular-nums; }
+.btn.round.vf-btn.vf-rec { width: auto; padding: 0 var(--space-2, 8px); gap: 6px; color: var(--destructive); }
+.btn.round.vf-btn.vf-rec:hover { background: color-mix(in oklch, var(--destructive) 12%, transparent); color: var(--destructive); }
+.vf-time { font: 500 var(--text-sm, 14px)/1 var(--font-ui, inherit); font-variant-numeric: tabular-nums; }
+.vf-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: vf-blink 1.2s ease-in-out infinite; }
+@keyframes vf-blink { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .vf-dot { animation: none; } }
+.vf-banner { position: fixed; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: var(--z-toast, 1000);
+  padding: 10px 16px; border-radius: var(--radius-lg, 12px); background: var(--popover, var(--card)); color: var(--foreground);
+  border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .18); font: 500 var(--text-base, 15px)/1.3 var(--font-ui, inherit);
+  max-width: min(560px, 90vw); text-align: center; }
