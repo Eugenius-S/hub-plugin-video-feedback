@@ -1,7 +1,7 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
 // расшифровка по фразам и кадры экрана в моменты, о которых говорил. Само видео нигде не пишется: на диск ложатся
 // только эти кадры, как вставленные картинки. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
-import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
+import { FRAMES, KEEP_DAYS, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
 
 const COUNT = 3;
 const EDGE = 1568, PIXELS = 1.15e6;   // больше этого модель кадр всё равно уменьшит: лишнее — только вес файла
@@ -130,6 +130,7 @@ function record() {
     r.voiceCut = phrases(VOICE);
     r.voiceCut.begin(0);
     r.piece = piece(r.mic);
+    r.whole = piece(r.mic);   // весь звук записи одним файлом: хаб хранит его 7 дней — расшифровать позже, если не вышло
   }
   // таймер — в отдельном потоке: вкладка хаба во время записи обычно не на виду, и её таймеры браузер притормаживает
   r.worker = new Worker(hubRef.url("tick.js"));
@@ -253,10 +254,12 @@ async function stop() {
   r.worker.terminate();
   document.title = r.title;
   paintAll();
+  let whole = null;
   if (r.an) {
     const last = r.voiceCut.finish(length);
     const blob = r.piece.stop();
     if (last) hear(r, last, blob);
+    whole = r.whole.stop();
   }
   release(r);
   try {
@@ -272,7 +275,16 @@ async function stop() {
       if (!meta?.path) throw new Error(up?.error || "кадр не загрузился");
       metas.push({ ...meta, label: `Image #${i + 1}` });
     }
-    const text = message({ length, phrases: r.list, frames, voice: r.voice });
+    let audio = null;
+    if (whole && r.list.length) {
+      try {
+        const b = await whole;
+        const up = await hubRef.post("/api/upload", { name: `voice-${new Date().toTimeString().slice(0, 5).replace(":", "-")}.webm`,
+          mime: b.type || "audio/webm", data: await base64(b), keep_days: KEEP_DAYS });
+        audio = up?.data?.path || null;
+      } catch { /* без звука — фразы и кадры всё равно уйдут */ }
+    }
+    const text = message({ length, phrases: r.list, frames, voice: r.voice, audio });
     const res = await r.ctx.send(text, metas);
     if (res?.error) throw new Error(res.error);
     banner(sentSummary(r.list.length, frames.length), 4000);

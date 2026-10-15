@@ -86,6 +86,17 @@ test("без голоса в хабе и без речи — сообщение 
   assert.equal(clock(61400), "1:01");
 });
 
+test("звук записи: путь и срок, а нет текста фраз — как расшифровать позже", () => {
+  const audio = "C:/state/attachments/ab/voice-14-50.webm";
+  const missing = message({ length: 5000, voice: false, frames: [], phrases: [{ speech: 0, text: "" }], audio });
+  assert.match(missing, /Звук записи — `C:\/state\/attachments\/ab\/voice-14-50\.webm` \(хранится 7 дней\)/);
+  assert.match(missing, /hub voice transcribe "C:\/state\/attachments\/ab\/voice-14-50\.webm"/);
+  const full = message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "ок" }], audio });
+  assert.match(full, /Звук записи/);
+  assert.doesNotMatch(full, /hub voice transcribe/);
+  assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "ок" }] }), /Звук записи/);
+});
+
 test("итог отправки — с формами слов, нулевое не пишется", () => {
   assert.equal(sentSummary(5, 3), "Отправлено: 5 фраз, 3 кадра");
   assert.equal(sentSummary(1, 21), "Отправлено: 1 фраза, 21 кадр");
