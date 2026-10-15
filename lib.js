@@ -65,6 +65,18 @@ export function pick(frames, lengths, max = FRAMES.max) {
   return [...frames].sort((a, b) => rank(b) - rank(a) || a.t - b.t).slice(0, max).sort((a, b) => a.t - b.t);
 }
 
+// 1 фраза, 3 кадра, 5 кадров
+export function count(n, [one, few, many]) {
+  const d = n % 10, h = n % 100;
+  return `${n} ${d === 1 && h !== 11 ? one : d >= 2 && d <= 4 && (h < 12 || h > 14) ? few : many}`;
+}
+
+// «Отправлено: 5 фраз, 3 кадра»; нулевое не пишем
+export function sentSummary(phrasesN, framesN) {
+  const parts = [phrasesN && count(phrasesN, ["фраза", "фразы", "фраз"]), framesN && count(framesN, ["кадр", "кадра", "кадров"])];
+  return "Отправлено: " + parts.filter(Boolean).join(", ");
+}
+
 export const clock = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -72,19 +84,19 @@ export const clock = (ms) => {
 
 // текст сообщения: фразы по времени, у каждой — метки её кадров ([Image #N] — как вставленные картинки поля ввода)
 export function message({ length, phrases: list, frames, voice }) {
-  const head = `Видео-фидбэк с экрана, ${clock(length)}. Видео не сохранялось: ниже — что я говорил, по фразам, `
-    + "и кадры экрана в эти моменты. Вычлени из этого мой фидбэк по пунктам: что не так и что хочу.";
+  const head = `Видео-фидбэк, ${clock(length)}. Видео не сохранилось, ниже мои слова по фразам и кадры экрана в эти `
+    + "моменты. Собери из этого мой фидбэк по пунктам: что не так и что я хочу.";
   const lines = [];
   let n = 0;
   const label = new Map(frames.map((f) => [f, `[Image #${++n}]`]));
   list.forEach((p, i) => {
     const mine = frames.filter((f) => f.phrase === i).map((f) => label.get(f));
-    const said = p.text ? `«${p.text}»` : voice ? "(не разобрал)" : "(без расшифровки)";
+    const said = p.text ? `«${p.text}»` : voice ? "(неразборчиво)" : "(без расшифровки)";
     lines.push(`${clock(p.speech)} ${said}${mine.length ? " " + mine.join(" ") : ""}`);
   });
   const loose = frames.filter((f) => f.phrase == null || f.phrase >= list.length).map((f) => `${clock(f.t)} ${label.get(f)}`);
   const tail = [];
-  if (!list.length) tail.push(voice ? "Голоса в записи не было — только кадры." : "Голос в хабе не настроен — только кадры.");
-  else if (!voice) tail.push("Голос в хабе не настроен: фразы без расшифровки.");
+  if (!list.length) tail.push(voice ? "Голоса в записи нет, только кадры." : "Расшифровка голоса в хабе не настроена, есть только кадры.");
+  else if (!voice) tail.push("Расшифровка голоса в хабе не настроена, фразы без текста.");
   return [head, "", ...lines, ...loose, ...(tail.length ? ["", ...tail] : [])].join("\n");
 }

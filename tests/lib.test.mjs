@@ -1,7 +1,7 @@
 // Логика видео-фидбэка без браузера: фразы по паузам, кадры, текст сообщения. Запуск: node --test tests/
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FRAMES, VOICE, changed, clock, diff, message, phrases, pick } from "../lib.js";
+import { FRAMES, VOICE, changed, clock, count, diff, message, phrases, pick, sentSummary } from "../lib.js";
 
 // громкость по времени: речь там, где [от, до)
 const run = (speech, until, step = 250) => {
@@ -75,13 +75,21 @@ test("сообщение: фразы по времени, у каждой её �
   const text = message({ length: 102e3, voice: true, frames,
     phrases: [{ speech: 1000, text: "кнопка прыгает" }, { speech: 5000, text: "" }] });
   const lines = text.split("\n");
-  assert.match(lines[0], /^Видео-фидбэк с экрана, 1:42\./);
-  assert.match(lines[0], /Вычлени/);
-  assert.deepEqual(lines.slice(2), ["0:01 «кнопка прыгает» [Image #1]", "0:05 (не разобрал) [Image #2] [Image #3]"]);
+  assert.match(lines[0], /^Видео-фидбэк, 1:42\./);
+  assert.match(lines[0], /Собери из этого мой фидбэк/);
+  assert.deepEqual(lines.slice(2), ["0:01 «кнопка прыгает» [Image #1]", "0:05 (неразборчиво) [Image #2] [Image #3]"]);
 });
 
 test("без голоса в хабе и без речи — сообщение говорит об этом", () => {
-  assert.match(message({ length: 5000, voice: false, frames: [{ t: 0 }], phrases: [] }), /Голос в хабе не настроен — только кадры/);
+  assert.match(message({ length: 5000, voice: false, frames: [{ t: 0 }], phrases: [] }), /Расшифровка голоса в хабе не настроена, есть только кадры/);
   assert.match(message({ length: 5000, voice: true, frames: [{ t: 0 }], phrases: [] }), /0:00 \[Image #1\]/);
   assert.equal(clock(61400), "1:01");
+});
+
+test("итог отправки — с формами слов, нулевое не пишется", () => {
+  assert.equal(sentSummary(5, 3), "Отправлено: 5 фраз, 3 кадра");
+  assert.equal(sentSummary(1, 21), "Отправлено: 1 фраза, 21 кадр");
+  assert.equal(sentSummary(0, 4), "Отправлено: 4 кадра");
+  assert.deepEqual([11, 12, 14, 22, 25, 111].map((n) => count(n, ["кадр", "кадра", "кадров"])),
+    ["11 кадров", "12 кадров", "14 кадров", "22 кадра", "25 кадров", "111 кадров"]);
 });

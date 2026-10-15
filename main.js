@@ -1,7 +1,7 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
 // расшифровка по фразам и кадры экрана в моменты, о которых говорил. Само видео нигде не пишется: на диск ложатся
 // только эти кадры, как вставленные картинки. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
-import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick } from "./lib.js";
+import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
 
 const COUNT = 3;
 const EDGE = 1568, PIXELS = 1.15e6;   // больше этого модель кадр всё равно уменьшит: лишнее — только вес файла
@@ -48,11 +48,11 @@ function paint(b, key) {
   else if (phase === "work") b.append(hubRef.el("span", "spin-dot"));
   else b.append(cam());
   const say = {
-    idle: "Видео-фидбэк: запись экрана с голосом. Выберите экран — запись начнётся через 3 секунды",
-    busy: "Идёт запись в другом поле",
+    idle: "Записать экран и голос. Запись начнётся через 3 секунды после выбора экрана",
+    busy: "Запись уже идёт в другом чате",
     count: `Запись через ${R?.left}`,
     rec: "Остановить и отправить",
-    work: "Расшифровываю и отправляю",
+    work: "Расшифровываю и отправляю…",
   }[phase];
   b.title = say;
   b.setAttribute("aria-label", say);
@@ -91,11 +91,11 @@ async function start(ctx, snap) {
     screen = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "monitor", frameRate: { ideal: 5, max: 10 } },
       audio: false, selfBrowserSurface: "include", surfaceSwitching: "include", monitorTypeSurfaces: "include" });
   } catch (e) {
-    if (e?.name !== "NotAllowedError") banner(`Запись экрана не включилась: ${e?.message || e}`, 8000);
+    if (e?.name !== "NotAllowedError") banner(`Не удалось включить запись экрана: ${e?.message || e}`, 8000);
     return;   // отменили выбор экрана — ничего не было
   }
   try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
-  catch { banner("Микрофон не дали — запишу только экран", 5000); }
+  catch { banner("Нет доступа к микрофону, пишу только экран", 5000); }
   R = { phase: "count", left: COUNT, key: ctx.key, ctx, screen, mic, voice: !!snap?.voice, cancelled: false };
   screen.getVideoTracks()[0].addEventListener("ended", () => stop());   // «Закрыть доступ» в полосе браузера
   const r = R;
@@ -263,7 +263,7 @@ async function stop() {
     await r.jobs;
     const lengths = r.list.map((p) => p.to - p.speech);
     const frames = pick(r.frames, lengths);
-    if (!frames.length && !r.list.length) throw new Error("в записи ни голоса, ни кадров");
+    if (!frames.length && !r.list.length) throw new Error("в записи нет ни голоса, ни кадров");
     const metas = [];
     for (const [i, f] of frames.entries()) {
       const up = await hubRef.post("/api/upload", { name: `screen-${clock(f.t).replace(":", "-")}.jpg`, mime: "image/jpeg",
@@ -275,9 +275,9 @@ async function stop() {
     const text = message({ length, phrases: r.list, frames, voice: r.voice });
     const res = await r.ctx.send(text, metas);
     if (res?.error) throw new Error(res.error);
-    banner(`Видео-фидбэк ушёл: ${r.list.length} фраз, ${frames.length} кадров`, 4000);
+    banner(sentSummary(r.list.length, frames.length), 4000);
   } catch (e) {
-    banner(`Видео-фидбэк не ушёл: ${e?.message || e}`, 12000);
+    banner(`Не отправилось: ${e?.message || e}`, 12000);
   } finally {
     R = null;
     paintAll();
