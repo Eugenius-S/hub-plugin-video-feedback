@@ -103,6 +103,14 @@ test("оборванная запись (страницу обновили по�
   assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "ок" }] }), /оборвалась/);
 });
 
+test("оборванная запись с видео: пути видео, части — по порядку", () => {
+  const one = message({ length: 5000, voice: true, frames: [], phrases: [], cut: true, video: ["C:/a/screen-video.webm"] });
+  assert.match(one, /Видео экрана сохранено: `C:\/a\/screen-video\.webm`/);
+  const two = message({ length: 5000, voice: true, frames: [], phrases: [], cut: true, video: ["C:/a/v-1of2.webm", "C:/a/v-2of2.webm"] });
+  assert.match(two, /частями .*`C:\/a\/v-1of2\.webm`, `C:\/a\/v-2of2\.webm`/);
+  assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [] }), /Видео экрана/);
+});
+
 test("итог отправки — с формами слов, нулевое не пишется", () => {
   assert.equal(sentSummary(5, 3), "Отправлено: 5 фраз, 3 кадра");
   assert.equal(sentSummary(1, 21), "Отправлено: 1 фраза, 21 кадр");

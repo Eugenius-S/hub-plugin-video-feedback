@@ -1,9 +1,10 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
 // расшифровка по фразам и кадры экрана в моменты, о которых говорил. Само видео нигде не пишется: на диск ложатся
 // только эти кадры, как вставленные картинки. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
-// До подтверждения доставки фразы, кадры и звук лежат в IndexedDB вкладки: перезапуск хаба или обновление страницы
-// их не теряет — отправка повторяется, после перезагрузки досылается сама (16.10: 3 минуты записи пропали при
-// перезапуске хаба — отправка упала, страница обновилась на новую версию).
+// До подтверждения доставки фразы, кадры, звук и видео экрана лежат в IndexedDB вкладки (запись на диск — strict:
+// переживает и выключение света): перезапуск хаба или обновление страницы их не теряет — отправка повторяется, после
+// перезагрузки досылается сама (16.10: 3 минуты записи пропали при перезапуске хаба). Видео в хаб уходит, только если
+// запись оборвалась (страницу закрыли посреди неё), — иначе удаляется вместе с записью после доставки.
 import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
 
 const COUNT = 3;
@@ -29,12 +30,20 @@ export default function register(hub) {
     id: "rec",
     render(root, snap, ctx) {
       root.__ctx = ctx;
-      let b = root.firstChild;
+      let b = root.__btn;
       if (!b) {
         b = hub.el("button", "btn round quiet vf-btn");
         b.type = "button";
         b.addEventListener("click", () => (R ? (R.key === root.__ctx.key ? stop() : null) : start(root.__ctx, snap)));
-        root.append(b);
+        // корзина — пока идёт запись: наговорил не то — удалить, агенту ничего не уходит (владелец 16.10)
+        b.__trash = hub.el("button", "btn round quiet vf-trash");
+        b.__trash.type = "button";
+        b.__trash.title = "Удалить запись, не отправлять";
+        b.__trash.setAttribute("aria-label", b.__trash.title);
+        b.__trash.append(bin());
+        b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
+        root.append(b.__trash, b);
+        root.__btn = b;
       }
       buttons.set(ctx.key, b);
       paint(b, ctx.key);
@@ -65,12 +74,30 @@ function paint(b, key) {
   }[phase];
   b.title = say;
   b.setAttribute("aria-label", say);
+  if (b.__trash) b.__trash.hidden = !(mine && (phase === "rec" || phase === "count"));
 }
 
 function paintAll() {
   // страница хаба не обновляется сама, пока стоит эта метка: запись идёт или ещё не доставлена
   document.documentElement.toggleAttribute("data-hub-hold", !!R && R.phase !== "count");
   for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key);
+}
+
+function bin() {
+  const ns = "http://www.w3.org/2000/svg";
+  const s = document.createElementNS(ns, "svg");
+  s.setAttribute("viewBox", "0 0 24 24");
+  s.setAttribute("class", "icon");
+  s.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("fill", "none");
+  p.setAttribute("stroke", "currentColor");
+  p.setAttribute("stroke-width", "1.8");
+  p.setAttribute("stroke-linecap", "round");
+  p.setAttribute("stroke-linejoin", "round");
+  p.setAttribute("d", "M4 7h16M10 11v6M14 11v6M5.5 7l1 12a2 2 0 0 0 2 1.8h7a2 2 0 0 0 2-1.8l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2");
+  s.append(p);
+  return s;
 }
 
 function cam() {
@@ -130,6 +157,8 @@ function record() {
   r.wall = Date.now();
   r.frameN = 0;
   r.wholeN = 0;
+  r.videoN = 0;
+  r.io = Promise.resolve();
   r.list = [];          // фразы: {from, speech, to, text}
   r.frames = [];        // кадры: {t, kind, phrase, blob, sig}
   r.jobs = Promise.resolve();
@@ -148,8 +177,11 @@ function record() {
     r.voiceCut.begin(0);
     r.piece = piece(r.mic);
     // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки (владелец 15.10); кусками по 5 с — в IndexedDB
-    r.whole = piece(r.mic, (b) => keep("blob", `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
+    r.whole = piece(r.mic, (b) => put(r, `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
   }
+  // видео экрана — только в IndexedDB, не в памяти: дойдёт до хаба, если запись оборвётся (владелец 16.10)
+  try { r.video = piece(r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
+  catch { r.video = null; }   // браузер не пишет видео — кадры и звук всё равно сохранятся
   saveMeta(r);
   // таймер — в отдельном потоке: вкладка хаба во время записи обычно не на виду, и её таймеры браузер притормаживает
   r.worker = new Worker(hubRef.url("tick.js"));
@@ -158,13 +190,17 @@ function record() {
   paintAll();
 }
 
-// кусок голоса: MediaRecorder идёт непрерывно, режется в паузах (VOICE)
-function piece(stream, onChunk, slice) {
-  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+// кусок голоса: MediaRecorder идёт непрерывно, режется в паузах (VOICE). Видео (VIDEO) — тот же запис, но куски только
+// отдаются onChunk (в IndexedDB) и в памяти не копятся; битрейт — чтобы 10 минут экрана влезли в одно вложение (20 МБ)
+const AUDIO = { kinds: ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"], type: "audio/webm" };
+const VIDEO = { kinds: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"], type: "video/webm",
+  opts: { videoBitsPerSecond: 250e3 }, memory: false };
+function piece(stream, onChunk, slice, kind = AUDIO) {
+  const mime = kind.kinds.find((m) => MediaRecorder.isTypeSupported(m)) || "";
   const chunks = [];
-  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
-  const done = new Promise((ok) => { rec.onstop = () => ok(new Blob(chunks, { type: rec.mimeType || "audio/webm" })); });
-  rec.ondataavailable = (e) => { if (e.data.size) { chunks.push(e.data); onChunk?.(e.data); } };
+  const rec = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), ...(kind.opts || {}) });
+  const done = new Promise((ok) => { rec.onstop = () => ok(new Blob(chunks, { type: rec.mimeType || kind.type })); });
+  rec.ondataavailable = (e) => { if (e.data.size) { if (kind.memory !== false) chunks.push(e.data); onChunk?.(e.data); } };
   rec.start(slice);
   return { stop: () => { if (rec.state !== "inactive") rec.stop(); return done; } };
 }
@@ -212,7 +248,7 @@ async function tick(r) {
 function hear(r, cut, blob) {
   const p = { ...cut, text: "", blob };
   const i = r.list.push(p) - 1;
-  blob.then((b) => { p.blob = b; return keep("blob", `${r.id}/p/${pad(i)}`, b); }).then(() => saveMeta(r));
+  blob.then((b) => { p.blob = b; return put(r, `${r.id}/p/${pad(i)}`, b); }).then(() => saveMeta(r));
   if (!r.voice) return;
   r.jobs = r.jobs.then(() => transcribe(p)).then(() => saveMeta(r));
 }
@@ -234,7 +270,7 @@ async function shoot(r, t, kind) {
     r.keptSig = sig;
     const n = r.frameN++;
     r.frames.push({ t, kind, phrase, blob, n });
-    keep("blob", `${r.id}/f/${pad(n)}`, blob).then(() => saveMeta(r));
+    put(r, `${r.id}/f/${pad(n)}`, blob).then(() => saveMeta(r));
   } catch { /* без этого кадра */ }
 }
 
@@ -287,17 +323,40 @@ async function stop() {
     if (last) hear(r, last, blob);
     whole = r.whole.stop();
   }
+  const video = r.video?.stop();
   release(r);
   try {
     await r.jobs;
+    await video;
     r.length = length;
     r.stopped = true;
+    await r.io;
     await saveMeta(r);
     await deliver({ ...meta(r), list: r.list, frames: r.frames, whole: whole ? await whole : null }, r.ctx);
   } finally {
     R = null;
     paintAll();
   }
+}
+
+// корзина: остановить и стереть — ни в хаб, ни в браузере ничего не остаётся
+async function discard() {
+  const r = R;
+  if (!r) return;
+  if (r.phase === "count") return stop();   // отсчёт ещё идёт — то же, что отмена
+  if (r.phase !== "rec") return;
+  r.phase = "gone";
+  r.dead = true;   // запоздалые куски и описание записи в IndexedDB больше не пишутся
+  r.worker.terminate();
+  document.title = r.title;
+  const stops = [r.piece?.stop(), r.whole?.stop(), r.video?.stop()];
+  release(r);
+  R = null;
+  paintAll();
+  await Promise.all(stops);
+  await r.io;
+  await forget(r.id);
+  banner("Запись удалена, агенту ничего не ушло", 4000);
 }
 
 // доставка: кадры, звук (если у фраз нет текста), сообщение. Хаб не ответил (перезапуск) — повтор; из IndexedDB запись
@@ -327,8 +386,25 @@ async function deliver(job, ctx) {
       sent.audioDone = true;
       await saveMeta(job);
     }
+    // оборванная запись — и видео экрана, частями до 18 МБ (вложение — до 20 МБ); части склеиваются байт в байт
+    if (!job.stopped && job.video && !sent.videoDone) {
+      sent.video = sent.video || [];
+      const PART = 18 * 1024 * 1024;
+      const n = Math.ceil(job.video.size / PART);
+      try {
+        for (let i = sent.video.length; i < n; i++) {
+          const b = job.video.slice(i * PART, (i + 1) * PART);
+          const up = await again(async () => hubRef.post("/api/upload", { name: `screen-video${n > 1 ? `-${i + 1}of${n}` : ""}.webm`,
+            mime: "video/webm", data: await base64(b) }), (x) => x?.data?.path);
+          sent.video.push(up.data.path);
+          await saveMeta(job);
+        }
+      } catch { /* без видео — кадры и звук всё равно уйдут */ }
+      sent.videoDone = true;
+      await saveMeta(job);
+    }
     const text = message({ length: job.length, phrases: job.list, frames, voice: job.voice, audio: sent.audio,
-      cut: !job.stopped });
+      cut: !job.stopped, video: sent.video || null });
     await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
     await forget(job.id);
     pending = pending.filter((x) => x.id !== job.id);
@@ -370,8 +446,10 @@ async function resume(ctx) {
     const frames = rec.frames.map((f) => ({ ...f, blob: blobs.get(`${rec.id}/f/${pad(f.n)}`) })).filter((f) => f.blob);
     const parts = [...blobs].filter(([k]) => k.startsWith(`${rec.id}/w/`)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([, v]) => v);
     const whole = parts.length ? new Blob(parts, { type: parts[0].type || "audio/webm" }) : null;
+    const vparts = [...blobs].filter(([k]) => k.startsWith(`${rec.id}/v/`)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([, v]) => v);
+    const video = vparts.length ? new Blob(vparts, { type: vparts[0].type || "video/webm" }) : null;
     banner(`Досылаю запись ${clock(rec.length)}, прерванную перезапуском`);
-    await deliver({ ...rec, list, frames, whole }, ctx);
+    await deliver({ ...rec, list, frames, whole, video }, ctx);
   } finally {
     R = null;
     paintAll();
@@ -385,6 +463,9 @@ async function scan() {
     const old = recs.filter((x) => Date.now() - x.wall > 7 * 864e5);   // неделю чат не открывали — не копить
     for (const x of old) await forget(x.id);
     pending = recs.filter((x) => !old.includes(x)).sort((a, b) => a.wall - b.wall);
+    const live = new Set(pending.map((x) => x.id));   // куски без записи (удалили корзиной, не дописалось) — стереть
+    const orphans = new Set((await tx("blob", "readonly", (st) => st.getAllKeys())).map((k) => String(k).split("/")[0]).filter((id) => !live.has(id)));
+    for (const id of orphans) await forget(id);
     if (!pending.length) return;
     banner(`Есть недоставленный видео-фидбэк (${pending.map((x) => `${clock(x.length)} → ${x.key}`).join(", ")}). `
       + "Отправлю, когда откроете этот чат", 15000);
@@ -406,7 +487,8 @@ function idb() {
 async function tx(name, mode, fn) {
   const d = await idb();
   return new Promise((ok, bad) => {
-    const t = d.transaction(name, mode);
+    // запись — strict: на диске, когда транзакция кончилась (иначе браузер может не успеть до выключения света)
+    const t = mode === "readwrite" ? d.transaction(name, mode, { durability: "strict" }) : d.transaction(name, mode);
     const out = fn(t.objectStore(name));
     t.oncomplete = () => ok(typeof out === "function" ? out() : out?.result);
     t.onerror = t.onabort = () => bad(t.error);
@@ -422,13 +504,15 @@ const blobsOf = (id) => tx("blob", "readonly", (s) => {
 const forget = (id) => tx("rec", "readwrite", (s) => s.delete(id))
   .then(() => tx("blob", "readwrite", (s) => s.delete(range(id)))).catch(() => {});
 const pad = (n) => String(n).padStart(4, "0");
+// кусок идущей записи — по очереди (корзина ждёт, пока допишется), стёртой — уже не пишется
+const put = (r, key, val) => (r.io = r.io.then(() => (r.dead ? null : keep("blob", key, val))));
 function meta(r) {
   return { id: r.id, key: r.key, wall: r.wall, voice: !!r.voice, stopped: !!r.stopped, sent: r.sent || null,
     length: r.length ?? (r.t0 != null ? performance.now() - r.t0 : 0),
     list: r.list.map(({ from, speech, to, text }) => ({ from, speech, to, text })),
     frames: r.frames.map(({ t: at, kind, phrase, n }) => ({ t: at, kind, phrase, n })) };
 }
-const saveMeta = (r) => (r.id ? keep("rec", null, meta(r)) : Promise.resolve());
+const saveMeta = (r) => (r.id && !r.dead ? keep("rec", null, meta(r)) : Promise.resolve());
 
 function release(r) {
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());

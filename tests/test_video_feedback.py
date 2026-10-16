@@ -25,11 +25,17 @@ class Manifest(unittest.TestCase):
 
 
 class Source(unittest.TestCase):
-    def test_video_is_never_kept(self):
-        # владелец: видео не должно копить диск — экран не пишется вовсе, только кадры в моменты фраз
+    def test_video_is_kept_only_until_delivery(self):
+        # владелец 15.10: видео не копит диск; 16.10: «данные бесценны… и видео обязательно» — видео и всё остальное
+        # лежат в IndexedDB вкладки (strict — переживает выключение света) до подтверждения доставки, потом стираются
         js = read("main.js")
-        self.assertEqual(js.count("new MediaRecorder("), 1)            # пишется только голос
+        self.assertEqual(js.count("new MediaRecorder("), 1)            # один запис на голос и экран
         self.assertIn("new MediaRecorder(stream", js)
+        self.assertIn("piece(r.screen,", js)
+        self.assertIn('durability: "strict"', js)
+        self.assertIn("await forget(job.id)", js)                      # после доставки — стереть
+        self.assertIn("data-hub-hold", js)                             # страница не обновляется посреди записи
+        self.assertIn("vf-trash", js)                                  # корзина: удалить, не отправлять
         self.assertIn('"composer.tools"', js)                          # значок — в поле ввода, рядом с микрофоном
         self.assertIn("const COUNT = 3", js)                           # запись — через 3 секунды
         self.assertIn('"/api/voice"', js)                              # распознаёт модуль «Голос» хаба
