@@ -50,5 +50,21 @@ class Source(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout[-2000:])
 
 
+    @unittest.skipUnless(shutil.which("node"), "нужен node")
+    def test_zip_opens_with_the_standard_tools(self):
+        # архив кадров разбирает сессия: python -m zipfile -e — должен открываться обычным zipfile
+        import tempfile, zipfile
+        out = os.path.join(tempfile.mkdtemp(), "f.zip")
+        js = ("import { zip } from %s; import { writeFileSync } from 'node:fs';"
+              "const f = [{ name: '0-00-01.jpg', data: new Uint8Array(3000).map((_, i) => i * 7) }, { name: '0-00-02.jpg', data: new TextEncoder().encode('кадр') }];"
+              "writeFileSync(%s, zip(f));") % (json.dumps("file:///" + os.path.join(ROOT, "lib.js").replace(os.sep, "/")), json.dumps(out))
+        r = subprocess.run(["node", "--input-type=module", "-e", js], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with zipfile.ZipFile(out) as z:
+            self.assertIsNone(z.testzip())
+            self.assertEqual(z.namelist(), ["0-00-01.jpg", "0-00-02.jpg"])
+            self.assertEqual(z.read("0-00-02.jpg").decode(), "кадр")
+
+
 if __name__ == "__main__":
     unittest.main()

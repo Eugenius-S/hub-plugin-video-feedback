@@ -1,11 +1,11 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
-// расшифровка по фразам и кадры экрана в моменты, о которых говорил. Само видео нигде не пишется: на диск ложатся
-// только эти кадры, как вставленные картинки. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
+// расшифровка по фразам и кадры экрана в моменты, о которых говорил (не больше 12 картинками), а все кадры — раз в
+// секунду, когда менялся экран, — архивом. Само видео нигде не пишется: на диск ложатся только кадры. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
 // До подтверждения доставки фразы, кадры, звук и видео экрана лежат в IndexedDB вкладки (запись на диск — strict:
 // переживает и выключение света): перезапуск хаба или обновление страницы их не теряет — отправка повторяется, после
 // перезагрузки досылается сама (16.10: 3 минуты записи пропали при перезапуске хаба). Видео в хаб уходит, только если
 // запись оборвалась (страницу закрыли посреди неё), — иначе удаляется вместе с записью после доставки.
-import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
+import { FRAMES, MAX_MS, VOICE, bundles, clock, diff, frameName, fresh, message, phrases, pick, sentSummary, zip } from "./lib.js";
 
 const COUNT = 3;
 const EDGE = 1568, PIXELS = 1.15e6;   // больше этого модель кадр всё равно уменьшит: лишнее — только вес файла
@@ -163,7 +163,6 @@ function record() {
   r.frames = [];        // кадры: {t, kind, phrase, blob, sig}
   r.jobs = Promise.resolve();
   r.grab = grabber(r.screen.getVideoTracks()[0]);
-  r.prevSig = null;
   r.keptSig = null;
   r.ticks = 0;
   r.title = document.title;
@@ -230,15 +229,11 @@ async function tick(r) {
       if (step.cut) hear(r, step.cut, blob);
     }
   }
-  if (r.ticks % 4 === 0 && !r.busySig) {   // раз в секунду — отпечаток экрана: сменился и встал — кадр
+  if (r.ticks % (FRAMES.every / TICK) === 0 && !r.busySig) {   // раз в секунду: экран сменился с прошлого кадра — кадр
     r.busySig = true;
     try {
       const { sig } = await r.grab(false);
-      const talking = !r.an || r.voiceCut.speaking();
-      const now = performance.now() - r.t0;
-      if (!r.an && !r.keptSig) shoot(r, now, "change");   // без микрофона фраз нет — первый кадр сразу
-      else if (sig && talking && r.keptSig && changed(sig, r.prevSig, r.keptSig)) shoot(r, now, "change");
-      r.prevSig = sig;
+      if (sig && fresh(sig, r.keptSig)) await shoot(r, performance.now() - r.t0, "change");
     } catch { /* кадр не снялся — следующий через секунду */ }
     r.busySig = false;
   }
@@ -266,7 +261,11 @@ async function shoot(r, t, kind) {
   const phrase = r.list.length;   // фраза, что идёт сейчас
   try {
     const { sig, blob } = await r.grab(true);
-    if (r.keptSig && diff(sig, r.keptSig) < FRAMES.same) return;   // тот же экран — второй кадр не нужен
+    if (r.keptSig && diff(sig, r.keptSig) < FRAMES.same) {   // тот же экран — второй кадр не нужен
+      const last = r.frames.at(-1);   // но начало фразы — у того, что уже снят: в чат он пойдёт первым
+      if (kind === "onset" && last && last.kind !== "onset") { last.kind = "onset"; last.phrase = phrase; saveMeta(r); }
+      return;
+    }
     r.keptSig = sig;
     const n = r.frameN++;
     r.frames.push({ t, kind, phrase, blob, n });
@@ -375,6 +374,26 @@ async function deliver(job, ctx) {
       sent.metas[i] = { ...up.data, label: `Image #${i + 1}` };
       await saveMeta(job);
     }
+    // кадров больше, чем ушло картинками, — все архивом (zip, части до 18 МБ): сессия распакует, разберёт и удалит
+    if (job.frames.length > frames.length && !sent.archiveDone) {
+      sent.archive = sent.archive || [];
+      const seen = new Set();
+      const all = [...job.frames].sort((a, b) => a.t - b.t).map((f) => ({ f, name: frameName(f.t, seen), size: f.blob.size }));
+      const groups = bundles(all, FRAMES.part);
+      try {
+        for (let i = sent.archive.length; i < groups.length; i++) {
+          const files = await Promise.all(groups[i].map(async (x) => ({ name: x.name, data: new Uint8Array(await x.f.blob.arrayBuffer()) })));
+          const b = new Blob([zip(files)], { type: "application/zip" });
+          const n = groups.length;
+          const up = await again(async () => hubRef.post("/api/upload", { name: `frames${n > 1 ? `-${i + 1}of${n}` : ""}.zip`,
+            mime: "application/zip", data: await base64(b) }), (x) => x?.data?.path);
+          sent.archive.push(up.data.path);
+          await saveMeta(job);
+        }
+      } catch { /* без архива — картинки выше и фразы всё равно уйдут */ }
+      sent.archiveDone = true;
+      await saveMeta(job);
+    }
     // всё расшифровалось — звук не нужен; запись оборвалась (страницу обновили посреди неё) — конец есть только в звуке
     if (job.whole && (!job.stopped || job.list.some((p) => !p.text)) && !sent.audioDone) {
       try {
@@ -404,11 +423,12 @@ async function deliver(job, ctx) {
       await saveMeta(job);
     }
     const text = message({ length: job.length, phrases: job.list, frames, voice: job.voice, audio: sent.audio,
-      cut: !job.stopped, video: sent.video || null });
+      cut: !job.stopped, video: sent.video || null,
+      archive: sent.archive?.length ? { paths: sent.archive, count: job.frames.length } : null });
     await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
     await forget(job.id);
     pending = pending.filter((x) => x.id !== job.id);
-    banner(sentSummary(job.list.length, frames.length), 4000);
+    banner(sentSummary(job.list.length, sent.archive?.length ? job.frames.length : frames.length), 4000);
     return true;
   } catch (e) {
     banner(`Не отправилось: ${e?.message || e}. Запись осталась в браузере — отправлю снова, когда откроете этот чат`, 15000);

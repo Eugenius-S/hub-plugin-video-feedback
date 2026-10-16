@@ -9,7 +9,9 @@ export const VOICE = {
   idle: 20e3,         // тишина без речи — запись куска заново, чтобы не копить пустое
   onset: 400,         // кадр — через столько после начала фразы: экран уже тот, о котором речь
 };
-export const FRAMES = { max: 12, changed: 0.06, same: 0.02, settled: 0.02 };
+// кадр — раз в секунду (every), если экран сменился больше чем на same; в чат картинками — max лучших, все — архивом
+// (владелец 16.10: на 4,5 мин записи 12 кадров — мимо прошло много указаний)
+export const FRAMES = { max: 12, same: 0.02, every: 1000, part: 18 * 1024 * 1024 };
 export const MAX_MS = 10 * 60e3;
 
 // Фразы. step(t, rms) → что сделать сейчас: {cut: фраза или null, restart, frame: "onset" | null}.
@@ -54,15 +56,20 @@ export function diff(a, b) {
   return s / a.length / 255;
 }
 
-// экран сменился и уже не двигается — пора снять кадр (во время фразы)
-export function changed(sig, prevSig, keptSig, f = FRAMES) {
-  return diff(sig, keptSig) > f.changed && diff(sig, prevSig) < f.settled;
-}
+// экран сменился с последнего кадра — пора снять новый
+export const fresh = (sig, keptSig, f = FRAMES) => !keptSig || diff(sig, keptSig) >= f.same;
 
-// кадры: [{t, kind: "onset" | "change", phrase}] → не больше max; сначала начала фраз (длинные фразы важнее), потом смены
+// кадры: [{t, kind: "onset" | "change", phrase}] → не больше max картинками; сначала начала фраз (длинные фразы важнее),
+// оставшиеся места — смены ровно по всей записи (остальное — в архиве)
 export function pick(frames, lengths, max = FRAMES.max) {
-  const rank = (f) => (f.kind === "onset" ? 1e9 : 0) + (lengths[f.phrase] || 0);
-  return [...frames].sort((a, b) => rank(b) - rank(a) || a.t - b.t).slice(0, max).sort((a, b) => a.t - b.t);
+  const byT = (a, b) => a.t - b.t;
+  const onsets = frames.filter((f) => f.kind === "onset")
+    .sort((a, b) => (lengths[b.phrase] || 0) - (lengths[a.phrase] || 0) || byT(a, b)).slice(0, max);
+  const rest = frames.filter((f) => f.kind !== "onset").sort(byT);
+  const room = Math.min(max - onsets.length, rest.length);
+  const spread = room <= 0 ? [] : room === 1 ? [rest[0]]
+    : Array.from({ length: room }, (_, i) => rest[Math.round((i * (rest.length - 1)) / (room - 1))]);
+  return [...onsets, ...spread].sort(byT);
 }
 
 // 1 фраза, 3 кадра, 5 кадров
@@ -77,13 +84,74 @@ export function sentSummary(phrasesN, framesN) {
   return "Отправлено: " + parts.filter(Boolean).join(", ");
 }
 
+// имя кадра в архиве — таймкод ч-мм-сс (сортируется по времени), в ту же секунду второй — с номером
+export function frameName(t, seen) {
+  const s = Math.max(0, Math.floor(t / 1000));
+  const base = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((x, i) => (i ? String(x).padStart(2, "0") : x)).join("-");
+  let name = `${base}.jpg`;
+  for (let k = 2; seen.has(name); k++) name = `${base}-${k}.jpg`;
+  seen.add(name);
+  return name;
+}
+
+// [{size}] → группы по порядку, в каждой не больше limit (вложение хаба — до 20 МБ); больший один — сам по себе
+export function bundles(items, limit) {
+  const out = [];
+  let cur = [], sum = 0;
+  for (const x of items) {
+    if (cur.length && sum + x.size > limit) { out.push(cur); cur = []; sum = 0; }
+    cur.push(x);
+    sum += x.size;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+// zip без сжатия (JPEG всё равно не жмётся): [{name, data: Uint8Array}] → Uint8Array; открывает любой unzip
+const CRC = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(d) {
+  let c = 0xffffffff;
+  for (let i = 0; i < d.length; i++) c = CRC[(c ^ d[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+export function zip(files) {
+  const enc = new TextEncoder(), parts = [], dir = [];
+  let off = 0;
+  const head = (sig, n) => { const b = new DataView(new ArrayBuffer(n)); b.setUint32(0, sig, true); return b; };
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+    const h = head(0x04034b50, 30);
+    h.setUint16(4, 20, true); h.setUint16(6, 0x800, true);   // версия 2.0, имена в UTF-8
+    h.setUint32(14, crc, true); h.setUint32(18, size, true); h.setUint32(22, size, true); h.setUint16(26, name.length, true);
+    const c = head(0x02014b50, 46);
+    c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, size, true); c.setUint32(24, size, true); c.setUint16(28, name.length, true);
+    c.setUint32(42, off, true);
+    parts.push(new Uint8Array(h.buffer), name, f.data);
+    dir.push(new Uint8Array(c.buffer), name);
+    off += 30 + name.length + size;
+  }
+  const dirSize = dir.reduce((s, x) => s + x.length, 0);
+  const e = head(0x06054b50, 22);
+  e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, dirSize, true); e.setUint32(16, off, true);
+  const all = [...parts, ...dir, new Uint8Array(e.buffer)];
+  const out = new Uint8Array(all.reduce((s, x) => s + x.length, 0));
+  let at = 0;
+  for (const x of all) { out.set(x, at); at += x.length; }
+  return out;
+}
+
 export const clock = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
 // текст сообщения: фразы по времени, у каждой — метки её кадров ([Image #N] — как вставленные картинки поля ввода)
-export function message({ length, phrases: list, frames, voice, audio, cut, video }) {
+export function message({ length, phrases: list, frames, voice, audio, cut, video, archive }) {
   const head = `Видео-фидбэк, ${clock(length)}. ${video?.length ? "Видео экрана — путь внизу" : "Видео не сохранилось"}, ниже мои слова по фразам и кадры экрана в эти `
     + "моменты. Собери из этого мой фидбэк по пунктам: что не так и что я хочу.";
   const lines = [];
@@ -98,6 +166,10 @@ export function message({ length, phrases: list, frames, voice, audio, cut, vide
   const tail = [];
   if (!list.length) tail.push(voice ? "Голоса в записи нет, только кадры." : "Расшифровка голоса в хабе не настроена, есть только кадры.");
   else if (!voice) tail.push("Расшифровка голоса в хабе не настроена, фразы без текста.");
+  if (archive?.paths?.length) tail.push(`Все ${count(archive.count, ["кадр", "кадра", "кадров"])} записи (раз в секунду, когда менялся экран; `
+    + `имя — таймкод ч-мм-сс) — ${archive.paths.length > 1 ? "архивы" : "архив"} ${archive.paths.map((x) => `\`${x}\``).join(", ")}. `
+    + "Распакуй во временную папку (`python -m zipfile -e <архив> <папка>`), смотри кадры на отрезке каждой фразы и между ними — "
+    + "там указания, которых нет в картинках выше. Разобрал — удали архив и папку.");
   if (cut) tail.push("Запись оборвалась: страница закрылась или обновилась посреди неё, договорённое после последней фразы есть только в звуке.");
   if (audio) tail.push(`${cut ? "Звук" : "Текста фраз нет, звук"} записи сохранён: \`${audio}\`. Расшифруй его — \`hub voice transcribe --remove "${audio}"\` `
     + "(файл удалится после расшифровки) — и разбери по тем же таймкодам.");

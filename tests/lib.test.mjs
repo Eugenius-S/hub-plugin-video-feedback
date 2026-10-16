@@ -1,7 +1,7 @@
 // Логика видео-фидбэка без браузера: фразы по паузам, кадры, текст сообщения. Запуск: node --test tests/
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FRAMES, VOICE, changed, clock, count, diff, message, phrases, pick, sentSummary } from "../lib.js";
+import { FRAMES, VOICE, bundles, clock, count, diff, fresh, frameName, message, phrases, pick, sentSummary, zip } from "../lib.js";
 
 // громкость по времени: речь там, где [от, до)
 const run = (speech, until, step = 250) => {
@@ -51,13 +51,14 @@ test("шумный фон: речь — только заметно громче
   assert.equal(p.speaking(), true);
 });
 
-test("кадр смены — экран сменился и встал; почти тот же экран — не кадр", () => {
-  const a = new Uint8Array(576).fill(10), b = new Uint8Array(576).fill(200);
+test("кадр — раз в секунду, когда экран сменился; тот же экран — не кадр", () => {
+  const a = new Uint8Array(576).fill(10), b = new Uint8Array(576).fill(200), c = new Uint8Array(576).fill(13);
   assert.equal(diff(a, a), 0);
-  assert.ok(changed(b, b, a));          // сменился и стоит
-  assert.ok(!changed(b, a, a));         // ещё едет
-  assert.ok(!changed(a, a, a));
-  assert.ok(FRAMES.same < FRAMES.changed);
+  assert.ok(fresh(a, null));            // первого кадра ещё нет
+  assert.ok(fresh(b, a));               // сменился — кадр, даже если ещё едет (владелец 16.10: 12 кадров на 4,5 мин — мало)
+  assert.ok(!fresh(a, a));
+  assert.ok(!fresh(c, a));              // мелочь (курсор, мигание) — не кадр
+  assert.equal(FRAMES.every, 1000);
 });
 
 test("кадров не больше max: сначала начала фраз, длинные важнее; по времени", () => {
@@ -68,6 +69,9 @@ test("кадров не больше max: сначала начала фраз, 
   assert.deepEqual(pick(frames, [1000, 9000, 500], 3).map((f) => f.t), [200, 300, 400]);
   assert.deepEqual(pick(frames, [1000, 9000, 500], 2).map((f) => f.t), [200, 300]);
   assert.equal(pick(frames, [], 12).length, 5);
+  // без фраз (или после начал фраз) — остальные ровно по записи, не первые подряд
+  const ticks = Array.from({ length: 100 }, (_, i) => ({ t: i * 1000, kind: "change", phrase: 0 }));
+  assert.deepEqual(pick(ticks, [], 4).map((f) => f.t), [0, 33000, 66000, 99000]);
 });
 
 test("сообщение: фразы по времени, у каждой её кадры метками [Image #N]", () => {
@@ -109,6 +113,37 @@ test("оборванная запись с видео: пути видео, ча
   const two = message({ length: 5000, voice: true, frames: [], phrases: [], cut: true, video: ["C:/a/v-1of2.webm", "C:/a/v-2of2.webm"] });
   assert.match(two, /частями .*`C:\/a\/v-1of2\.webm`, `C:\/a\/v-2of2\.webm`/);
   assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [] }), /Видео экрана/);
+});
+
+test("много кадров: в чат — max лучших, все — архивом; путь, таймкоды и что удалить после разбора", () => {
+  const frames = [{ t: 1400, phrase: 0 }];
+  const text = message({ length: 270e3, voice: true, frames, phrases: [{ speech: 1000, text: "тут" }],
+    archive: { paths: ["C:/a/frames-1of2.zip", "C:/a/frames-2of2.zip"], count: 230 } });
+  assert.match(text, /Все 230 кадров/);
+  assert.match(text, /`C:\/a\/frames-1of2\.zip`, `C:\/a\/frames-2of2\.zip`/);
+  assert.match(text, /python -m zipfile -e/);
+  assert.match(text, /удали/);
+  assert.doesNotMatch(message({ length: 5000, voice: true, frames, phrases: [] }), /архив/);
+});
+
+test("имя кадра в архиве — таймкод, совпадения — с номером", () => {
+  const seen = new Set();
+  assert.deepEqual([65e3, 65400, 3725e3].map((t) => frameName(t, seen)), ["0-01-05.jpg", "0-01-05-2.jpg", "1-02-05.jpg"]);
+});
+
+test("архивы — по размеру: каждый не больше предела, порядок сохраняется", () => {
+  const items = [5, 5, 5, 9, 1].map((size, i) => ({ i, size }));
+  assert.deepEqual(bundles(items, 10).map((g) => g.map((x) => x.i)), [[0, 1], [2], [3, 4]]);
+  assert.deepEqual(bundles([], 10), []);
+  assert.deepEqual(bundles([{ i: 0, size: 50 }], 10).map((g) => g.length), [1]);   // больше предела — один в своём
+});
+
+test("zip без сжатия: заголовки и CRC32", () => {
+  const z = zip([{ name: "a.txt", data: new TextEncoder().encode("hello") }]);
+  const v = new DataView(z.buffer);
+  assert.equal(v.getUint32(0, true), 0x04034b50);
+  assert.equal(v.getUint32(14, true), 0x3610a686);   // crc32("hello")
+  assert.equal(v.getUint32(z.length - 22, true), 0x06054b50);
 });
 
 test("итог отправки — с формами слов, нулевое не пишется", () => {
