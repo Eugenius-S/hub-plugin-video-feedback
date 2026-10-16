@@ -1,6 +1,9 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
 // расшифровка по фразам и кадры экрана в моменты, о которых говорил. Само видео нигде не пишется: на диск ложатся
 // только эти кадры, как вставленные картинки. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
+// До подтверждения доставки фразы, кадры и звук лежат в IndexedDB вкладки: перезапуск хаба или обновление страницы
+// их не теряет — отправка повторяется, после перезагрузки досылается сама (16.10: 3 минуты записи пропали при
+// перезапуске хаба — отправка упала, страница обновилась на новую версию).
 import { FRAMES, MAX_MS, VOICE, changed, clock, diff, message, phrases, pick, sentSummary } from "./lib.js";
 
 const COUNT = 3;
@@ -10,6 +13,8 @@ const TICK = 250;
 let R = null;          // идущая запись: {phase: "count" | "rec" | "work", key, ...}
 const buttons = new Map();   // ключ поля → кнопка
 let hubRef = null;
+let pending = [];      // недоставленные записи из IndexedDB (прошлая жизнь вкладки) — дошлёт поле ввода их чата
+const resuming = new Set();
 
 globalThis.__videoFeedback = () => R;   // для проверки в песочнице: идущая запись
 
@@ -17,6 +22,9 @@ export default function register(hub) {
   if (!navigator.mediaDevices?.getDisplayMedia) return;   // телефон: записи экрана нет — и значка нет
   hubRef = hub;
   hub.addStyle("style.css");
+  // запись или отправка — уход со страницы спросит (а обновление на новую версию хаба подождёт метку data-hub-hold)
+  addEventListener("beforeunload", (e) => { if (R && R.phase !== "count") { e.preventDefault(); e.returnValue = ""; } });
+  scan();
   hub.addSlot("composer.tools", {
     id: "rec",
     render(root, snap, ctx) {
@@ -30,6 +38,7 @@ export default function register(hub) {
       }
       buttons.set(ctx.key, b);
       paint(b, ctx.key);
+      if (!R) resume(ctx).catch(() => {});
     },
   });
 }
@@ -58,7 +67,11 @@ function paint(b, key) {
   b.setAttribute("aria-label", say);
 }
 
-function paintAll() { for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key); }
+function paintAll() {
+  // страница хаба не обновляется сама, пока стоит эта метка: запись идёт или ещё не доставлена
+  document.documentElement.toggleAttribute("data-hub-hold", !!R && R.phase !== "count");
+  for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key);
+}
 
 function cam() {
   const ns = "http://www.w3.org/2000/svg";
@@ -113,6 +126,10 @@ function record() {
   const r = R;
   r.phase = "rec";
   r.t0 = performance.now();
+  r.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  r.wall = Date.now();
+  r.frameN = 0;
+  r.wholeN = 0;
   r.list = [];          // фразы: {from, speech, to, text}
   r.frames = [];        // кадры: {t, kind, phrase, blob, sig}
   r.jobs = Promise.resolve();
@@ -130,8 +147,10 @@ function record() {
     r.voiceCut = phrases(VOICE);
     r.voiceCut.begin(0);
     r.piece = piece(r.mic);
-    r.whole = piece(r.mic);   // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки (владелец 15.10)
+    // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки (владелец 15.10); кусками по 5 с — в IndexedDB
+    r.whole = piece(r.mic, (b) => keep("blob", `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
   }
+  saveMeta(r);
   // таймер — в отдельном потоке: вкладка хаба во время записи обычно не на виду, и её таймеры браузер притормаживает
   r.worker = new Worker(hubRef.url("tick.js"));
   r.worker.onmessage = () => tick(r);
@@ -140,13 +159,13 @@ function record() {
 }
 
 // кусок голоса: MediaRecorder идёт непрерывно, режется в паузах (VOICE)
-function piece(stream) {
+function piece(stream, onChunk, slice) {
   const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
   const chunks = [];
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
   const done = new Promise((ok) => { rec.onstop = () => ok(new Blob(chunks, { type: rec.mimeType || "audio/webm" })); });
-  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  rec.start();
+  rec.ondataavailable = (e) => { if (e.data.size) { chunks.push(e.data); onChunk?.(e.data); } };
+  rec.start(slice);
   return { stop: () => { if (rec.state !== "inactive") rec.stop(); return done; } };
 }
 
@@ -155,6 +174,7 @@ async function tick(r) {
   const t = performance.now() - r.t0;
   if (t >= MAX_MS) return stop();
   r.ticks++;
+  if (r.ticks % 20 === 0) saveMeta(r);   // длина — на случай, если вкладку обновят посреди записи
   if (r.ticks % 4 === 0) {
     paintAll();
     document.title = `● ${clock(t)} · запись`;
@@ -190,16 +210,20 @@ async function tick(r) {
 
 // фраза закончилась: распознать её сейчас же, пока идёт запись (к остановке почти всё уже готово)
 function hear(r, cut, blob) {
-  const p = { ...cut, text: "" };
-  r.list.push(p);
+  const p = { ...cut, text: "", blob };
+  const i = r.list.push(p) - 1;
+  blob.then((b) => { p.blob = b; return keep("blob", `${r.id}/p/${pad(i)}`, b); }).then(() => saveMeta(r));
   if (!r.voice) return;
-  r.jobs = r.jobs.then(async () => {
-    try {
-      const b = await blob;
-      const res = await hubRef.post("/api/voice", { data: await base64(b), mime: b.type });
-      p.text = String(res?.data?.text || "").trim();
-    } catch { /* не разобрал — в сообщении так и будет */ }
-  });
+  r.jobs = r.jobs.then(() => transcribe(p)).then(() => saveMeta(r));
+}
+
+// фраза → текст; хаб не ответил (перезапуск) — ещё раз при отправке
+async function transcribe(p) {
+  try {
+    const b = await p.blob;
+    const res = await hubRef.post("/api/voice", { data: await base64(b), mime: b.type });
+    p.text = String(res?.data?.text || "").trim();
+  } catch { /* не разобрал — в сообщении так и будет */ }
 }
 
 async function shoot(r, t, kind) {
@@ -208,7 +232,9 @@ async function shoot(r, t, kind) {
     const { sig, blob } = await r.grab(true);
     if (r.keptSig && diff(sig, r.keptSig) < FRAMES.same) return;   // тот же экран — второй кадр не нужен
     r.keptSig = sig;
-    r.frames.push({ t, kind, phrase, blob });
+    const n = r.frameN++;
+    r.frames.push({ t, kind, phrase, blob, n });
+    keep("blob", `${r.id}/f/${pad(n)}`, blob).then(() => saveMeta(r));
   } catch { /* без этого кадра */ }
 }
 
@@ -264,37 +290,145 @@ async function stop() {
   release(r);
   try {
     await r.jobs;
-    const lengths = r.list.map((p) => p.to - p.speech);
-    const frames = pick(r.frames, lengths);
-    if (!frames.length && !r.list.length) throw new Error("в записи нет ни голоса, ни кадров");
-    const metas = [];
-    for (const [i, f] of frames.entries()) {
-      const up = await hubRef.post("/api/upload", { name: `screen-${clock(f.t).replace(":", "-")}.jpg`, mime: "image/jpeg",
-        data: await base64(f.blob) });
-      const meta = up?.data;
-      if (!meta?.path) throw new Error(up?.error || "кадр не загрузился");
-      metas.push({ ...meta, label: `Image #${i + 1}` });
-    }
-    let audio = null;
-    if (whole && r.list.some((p) => !p.text)) {   // всё расшифровалось — звук не нужен
-      try {
-        const b = await whole;
-        const up = await hubRef.post("/api/upload", { name: `voice-${new Date().toTimeString().slice(0, 5).replace(":", "-")}.webm`,
-          mime: b.type || "audio/webm", data: await base64(b) });
-        audio = up?.data?.path || null;
-      } catch { /* без звука — фразы и кадры всё равно уйдут */ }
-    }
-    const text = message({ length, phrases: r.list, frames, voice: r.voice, audio });
-    const res = await r.ctx.send(text, metas);
-    if (res?.error) throw new Error(res.error);
-    banner(sentSummary(r.list.length, frames.length), 4000);
-  } catch (e) {
-    banner(`Не отправилось: ${e?.message || e}`, 12000);
+    r.length = length;
+    r.stopped = true;
+    await saveMeta(r);
+    await deliver({ ...meta(r), list: r.list, frames: r.frames, whole: whole ? await whole : null }, r.ctx);
   } finally {
     R = null;
     paintAll();
   }
 }
+
+// доставка: кадры, звук (если у фраз нет текста), сообщение. Хаб не ответил (перезапуск) — повтор; из IndexedDB запись
+// уходит только после того, как хаб принял сообщение. Уже загруженное (sent) второй раз не грузится
+async function deliver(job, ctx) {
+  try {
+    if (job.voice) for (const p of job.list) if (!p.text && p.blob) await transcribe(p);
+    const lengths = job.list.map((p) => p.to - p.speech);
+    const frames = pick(job.frames, lengths);
+    if (!frames.length && !job.list.length) { await forget(job.id); throw new Error("в записи нет ни голоса, ни кадров"); }
+    const sent = (job.sent = job.sent || { metas: [], audio: null, audioDone: false });
+    for (const [i, f] of frames.entries()) {
+      if (sent.metas[i]) continue;
+      const up = await again(async () => hubRef.post("/api/upload", { name: `screen-${clock(f.t).replace(":", "-")}.jpg`,
+        mime: "image/jpeg", data: await base64(f.blob) }), (x) => x?.data?.path);
+      sent.metas[i] = { ...up.data, label: `Image #${i + 1}` };
+      await saveMeta(job);
+    }
+    // всё расшифровалось — звук не нужен; запись оборвалась (страницу обновили посреди неё) — конец есть только в звуке
+    if (job.whole && (!job.stopped || job.list.some((p) => !p.text)) && !sent.audioDone) {
+      try {
+        const b = job.whole;
+        const up = await again(async () => hubRef.post("/api/upload", { name: `voice-${new Date().toTimeString().slice(0, 5).replace(":", "-")}.webm`,
+          mime: b.type || "audio/webm", data: await base64(b) }), (x) => x?.data?.path);
+        sent.audio = up.data.path;
+      } catch { /* без звука — фразы и кадры всё равно уйдут */ }
+      sent.audioDone = true;
+      await saveMeta(job);
+    }
+    const text = message({ length: job.length, phrases: job.list, frames, voice: job.voice, audio: sent.audio,
+      cut: !job.stopped });
+    await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
+    await forget(job.id);
+    pending = pending.filter((x) => x.id !== job.id);
+    banner(sentSummary(job.list.length, frames.length), 4000);
+    return true;
+  } catch (e) {
+    banner(`Не отправилось: ${e?.message || e}. Запись осталась в браузере — отправлю снова, когда откроете этот чат`, 15000);
+    if (!pending.some((x) => x.id === job.id)) pending.push({ ...meta(job), sent: job.sent });
+    resuming.delete(job.id);
+    return false;
+  }
+}
+
+// хаб перезапускается — повторы до ~5 минут; ошибку живого хаба от перезапуска не отличить — тоже повтор
+const WAITS = [0, 1, 2, 3, 5, 5, 10, 10, 15, 15, 30, 30, 30, 30, 30, 30, 30];
+async function again(fn, ok) {
+  let last = null;
+  for (const wait of WAITS) {
+    if (wait) { banner(`Хаб не отвечает — повторю через ${wait} с. Запись сохранена в браузере`); await sleep(wait * 1000); }
+    try {
+      const res = await fn();
+      if (ok(res)) { if (wait) banner(""); return res; }
+      last = res?.error || "хаб не принял";
+    } catch (e) { last = e?.message || String(e); }
+  }
+  throw new Error(last);
+}
+
+// недоставленная запись прошлой жизни вкладки — дослать из поля ввода её чата
+async function resume(ctx) {
+  const rec = pending.find((x) => x.key === ctx.key && !resuming.has(x.id));
+  if (!rec || R) return;
+  resuming.add(rec.id);
+  R = { phase: "work", key: ctx.key, ctx };
+  paintAll();
+  try {
+    const blobs = new Map(await blobsOf(rec.id));
+    const list = rec.list.map((p, i) => ({ ...p, blob: blobs.get(`${rec.id}/p/${pad(i)}`) || null }));
+    const frames = rec.frames.map((f) => ({ ...f, blob: blobs.get(`${rec.id}/f/${pad(f.n)}`) })).filter((f) => f.blob);
+    const parts = [...blobs].filter(([k]) => k.startsWith(`${rec.id}/w/`)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([, v]) => v);
+    const whole = parts.length ? new Blob(parts, { type: parts[0].type || "audio/webm" }) : null;
+    banner(`Досылаю запись ${clock(rec.length)}, прерванную перезапуском`);
+    await deliver({ ...rec, list, frames, whole }, ctx);
+  } finally {
+    R = null;
+    paintAll();
+  }
+}
+
+// при загрузке страницы: что осталось недоставленным
+async function scan() {
+  try {
+    const recs = await all("rec");
+    const old = recs.filter((x) => Date.now() - x.wall > 7 * 864e5);   // неделю чат не открывали — не копить
+    for (const x of old) await forget(x.id);
+    pending = recs.filter((x) => !old.includes(x)).sort((a, b) => a.wall - b.wall);
+    if (!pending.length) return;
+    banner(`Есть недоставленный видео-фидбэк (${pending.map((x) => `${clock(x.length)} → ${x.key}`).join(", ")}). `
+      + "Отправлю, когда откроете этот чат", 15000);
+    for (const b of buttons.values()) if (b.isConnected && b.parentNode?.__ctx) await resume(b.parentNode.__ctx);
+  } catch { /* IndexedDB нет (частный режим) — запись живёт только в памяти, как раньше */ }
+}
+
+// ───── IndexedDB: rec — описание записи (фразы, кадры, что уже загружено), blob — файлы `id/p|f|w/номер` ─────
+let dbP = null;
+function idb() {
+  dbP = dbP || new Promise((ok, bad) => {
+    const q = indexedDB.open("hub-video-feedback", 1);
+    q.onupgradeneeded = () => { q.result.createObjectStore("rec", { keyPath: "id" }); q.result.createObjectStore("blob"); };
+    q.onsuccess = () => ok(q.result);
+    q.onerror = () => bad(q.error);
+  });
+  return dbP;
+}
+async function tx(name, mode, fn) {
+  const d = await idb();
+  return new Promise((ok, bad) => {
+    const t = d.transaction(name, mode);
+    const out = fn(t.objectStore(name));
+    t.oncomplete = () => ok(typeof out === "function" ? out() : out?.result);
+    t.onerror = t.onabort = () => bad(t.error);
+  });
+}
+const range = (id) => IDBKeyRange.bound(`${id}/`, `${id}/￿`);
+const keep = (name, key, val) => tx(name, "readwrite", (s) => (key == null ? s.put(val) : s.put(val, key))).catch(() => {});
+const all = (name) => tx(name, "readonly", (s) => s.getAll());
+const blobsOf = (id) => tx("blob", "readonly", (s) => {
+  const k = s.getAllKeys(range(id)), v = s.getAll(range(id));
+  return () => k.result.map((x, i) => [x, v.result[i]]);
+});
+const forget = (id) => tx("rec", "readwrite", (s) => s.delete(id))
+  .then(() => tx("blob", "readwrite", (s) => s.delete(range(id)))).catch(() => {});
+const pad = (n) => String(n).padStart(4, "0");
+function meta(r) {
+  return { id: r.id, key: r.key, wall: r.wall, voice: !!r.voice, stopped: !!r.stopped, sent: r.sent || null,
+    length: r.length ?? (r.t0 != null ? performance.now() - r.t0 : 0),
+    list: r.list.map(({ from, speech, to, text }) => ({ from, speech, to, text })),
+    frames: r.frames.map(({ t: at, kind, phrase, n }) => ({ t: at, kind, phrase, n })) };
+}
+const saveMeta = (r) => (r.id ? keep("rec", null, meta(r)) : Promise.resolve());
 
 function release(r) {
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());

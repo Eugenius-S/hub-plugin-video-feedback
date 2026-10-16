@@ -83,7 +83,7 @@ export const clock = (ms) => {
 };
 
 // текст сообщения: фразы по времени, у каждой — метки её кадров ([Image #N] — как вставленные картинки поля ввода)
-export function message({ length, phrases: list, frames, voice, audio }) {
+export function message({ length, phrases: list, frames, voice, audio, cut }) {
   const head = `Видео-фидбэк, ${clock(length)}. Видео не сохранилось, ниже мои слова по фразам и кадры экрана в эти `
     + "моменты. Собери из этого мой фидбэк по пунктам: что не так и что я хочу.";
   const lines = [];
@@ -98,7 +98,8 @@ export function message({ length, phrases: list, frames, voice, audio }) {
   const tail = [];
   if (!list.length) tail.push(voice ? "Голоса в записи нет, только кадры." : "Расшифровка голоса в хабе не настроена, есть только кадры.");
   else if (!voice) tail.push("Расшифровка голоса в хабе не настроена, фразы без текста.");
-  if (audio) tail.push(`Текста фраз нет, звук записи сохранён: \`${audio}\`. Расшифруй его — \`hub voice transcribe --remove "${audio}"\` `
+  if (cut) tail.push("Запись оборвалась: страницу обновили посреди неё, договорённое после последней фразы есть только в звуке.");
+  if (audio) tail.push(`${cut ? "Звук" : "Текста фраз нет, звук"} записи сохранён: \`${audio}\`. Расшифруй его — \`hub voice transcribe --remove "${audio}"\` `
     + "(файл удалится после расшифровки) — и разбери по тем же таймкодам.");
   return [head, "", ...lines, ...loose, ...(tail.length ? ["", ...tail] : [])].join("\n");
 }

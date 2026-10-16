@@ -95,6 +95,14 @@ test("звук без расшифровки: путь и как расшифр�
   assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "ок" }] }), /звук записи/);
 });
 
+test("оборванная запись (страницу обновили посреди неё): об этом сказано, звук — всегда", () => {
+  const audio = "C:/state/attachments/ab/voice-14-50.webm";
+  const text = message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "ок" }], audio, cut: true });
+  assert.match(text, /Запись оборвалась/);
+  assert.match(text, /Звук записи сохранён: `C:\/state/);
+  assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "ок" }] }), /оборвалась/);
+});
+
 test("итог отправки — с формами слов, нулевое не пишется", () => {
   assert.equal(sentSummary(5, 3), "Отправлено: 5 фраз, 3 кадра");
   assert.equal(sentSummary(1, 21), "Отправлено: 1 фраза, 21 кадр");
