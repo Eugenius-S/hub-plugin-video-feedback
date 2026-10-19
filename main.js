@@ -1,16 +1,19 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
 // расшифровка по фразам и кадры экрана в моменты, о которых говорил (не больше 12 картинками), а все кадры — каждые
-// полсекунды, безусловно, — архивом. Само видео нигде не пишется: на диск ложатся только кадры. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
+// полсекунды, безусловно, — архивом, и само видео экрана файлом (частями до 18 МБ). Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
 // До подтверждения доставки фразы, кадры, звук и видео экрана лежат в IndexedDB вкладки (запись на диск — strict:
 // переживает и выключение света): перезапуск хаба или обновление страницы их не теряет — отправка повторяется, после
-// перезагрузки досылается сама (16.10: 3 минуты записи пропали при перезапуске хаба). Видео в хаб уходит, только если
-// запись оборвалась (страницу закрыли посреди неё), — иначе удаляется вместе с записью после доставки.
+// перезагрузки досылается сама (16.10: 3 минуты записи пропали при перезапуске хаба). Видео уходит в хаб всегда — и после
+// обычной остановки, и у оборванной записи (19.10: 0.3–0.5 слали его только при обрыве, в тексте было «Видео не сохранилось»);
+// из браузера стирается после того, как хаб принял сообщение.
 import { FRAMES, MAX_MS, VOICE, bundles, clock, frameName, message, phrases, pick, sentSummary, zip } from "./lib.js";
 
 const COUNT = 3;
 // кадров по два в секунду, 10 минут — 1200 штук: JPEG сжат так, чтобы текст на экране читался, а архив не раздувался
 const EDGE = 1280, PIXELS = 0.95e6, QUALITY = 0.6;
 const TICK = 250;
+const VIDEO_PART = 18 * 1024 * 1024;   // часть видео в одной загрузке
+const VIDEO_TRIES = 3;                 // заходов с отказом хаба, после которых сообщение уходит без видео
 
 let R = null;          // идущая запись: {phase: "count" | "rec" | "work", key, ...}
 const buttons = new Map();   // ключ поля → кнопка
@@ -189,17 +192,17 @@ function record() {
   paintAll();
 }
 
-// кусок голоса: MediaRecorder идёт непрерывно, режется в паузах (VOICE). Видео (VIDEO) — тот же запис, но куски только
-// отдаются onChunk (в IndexedDB) и в памяти не копятся; битрейт — чтобы 10 минут экрана влезли в одно вложение (20 МБ)
+// кусок голоса: MediaRecorder идёт непрерывно, режется в паузах (VOICE). Видео (VIDEO) — тот же запис, куски которого
+// ещё и сразу уходят в IndexedDB (onChunk); битрейт — чтобы 10 минут экрана были ≈19 МБ
 const AUDIO = { kinds: ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"], type: "audio/webm" };
 const VIDEO = { kinds: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"], type: "video/webm",
-  opts: { videoBitsPerSecond: 250e3 }, memory: false };
+  opts: { videoBitsPerSecond: 250e3 } };
 function piece(stream, onChunk, slice, kind = AUDIO) {
   const mime = kind.kinds.find((m) => MediaRecorder.isTypeSupported(m)) || "";
   const chunks = [];
   const rec = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), ...(kind.opts || {}) });
   const done = new Promise((ok) => { rec.onstop = () => ok(new Blob(chunks, { type: rec.mimeType || kind.type })); });
-  rec.ondataavailable = (e) => { if (e.data.size) { if (kind.memory !== false) chunks.push(e.data); onChunk?.(e.data); } };
+  rec.ondataavailable = (e) => { if (e.data.size) { chunks.push(e.data); onChunk?.(e.data); } };
   rec.start(slice);
   return { stop: () => { if (rec.state !== "inactive") rec.stop(); return done; } };
 }
@@ -307,12 +310,13 @@ async function stop() {
   release(r);
   try {
     await r.jobs;
-    await video;
     r.length = length;
     r.stopped = true;
+    const screen = video ? await video : null;   // видео экрана целиком (куски — и в IndexedDB, на случай обрыва отправки)
     await r.io;
     await saveMeta(r);
-    await deliver({ ...meta(r), list: r.list, frames: r.frames, whole: whole ? await whole : null }, r.ctx);
+    await deliver({ ...meta(r), list: r.list, frames: r.frames, whole: whole ? await whole : null,
+      video: screen?.size ? screen : null }, r.ctx);
   } finally {
     R = null;
     paintAll();
@@ -386,20 +390,26 @@ async function deliver(job, ctx) {
       sent.audioDone = true;
       await saveMeta(job);
     }
-    // оборванная запись — и видео экрана, частями до 18 МБ (вложение — до 20 МБ); части склеиваются байт в байт
-    if (!job.stopped && job.video && !sent.videoDone) {
+    // видео экрана — всегда, частями до 18 МБ (вложение — до 20 МБ); части склеиваются байт в байт. Не загрузилось (хаб лежит
+    // дольше повторов) — запись остаётся в браузере и досылается при следующем заходе; без видео сообщение уходит
+    // только после VIDEO_TRIES неудачных заходов (стойкий отказ хаба не должен держать фидбэк вечно)
+    if (job.video?.size && !sent.videoDone) {
       sent.video = sent.video || [];
-      const PART = 18 * 1024 * 1024;
-      const n = Math.ceil(job.video.size / PART);
+      const n = Math.ceil(job.video.size / VIDEO_PART);
       try {
         for (let i = sent.video.length; i < n; i++) {
-          const b = job.video.slice(i * PART, (i + 1) * PART);
+          const b = job.video.slice(i * VIDEO_PART, (i + 1) * VIDEO_PART);
           const up = await again(async () => hubRef.post("/api/upload", { name: `screen-video${n > 1 ? `-${i + 1}of${n}` : ""}.webm`,
             mime: "video/webm", data: await base64(b) }), (x) => x?.data?.path);
           sent.video.push(up.data.path);
           await saveMeta(job);
         }
-      } catch { /* без видео — кадры и звук всё равно уйдут */ }
+      } catch (e) {
+        sent.videoFails = (sent.videoFails || 0) + 1;
+        await saveMeta(job);
+        if (sent.videoFails < VIDEO_TRIES) throw new Error(`видео экрана не загрузилось (${e?.message || e})`);
+        sent.video = null;   // отказались: часть без остальных — не видео
+      }
       sent.videoDone = true;
       await saveMeta(job);
     }

@@ -42,6 +42,23 @@ class Source(unittest.TestCase):
         self.assertIn('new Worker(hubRef.url("tick.js"))', js)         # часы — не таймер вкладки (её притормаживают)
         self.assertNotIn("fresh(", js)                                 # кадр каждые 500 мс безусловно, без сравнения экранов
 
+    def test_video_is_always_sent(self):
+        # 19.10 (d68760): 0.3–0.5 слали видео только оборванной записи — после обычной остановки в тексте было «Видео не сохранилось»
+        js = read("main.js")
+        self.assertNotIn("!job.stopped && job.video", js)
+        self.assertIn("if (job.video?.size && !sent.videoDone)", js)    # видео уходит и у остановленной записи
+        self.assertIn("video: screen?.size ? screen : null", js)        # в доставку оно попадает целым, не пустым куском
+        self.assertNotIn("memory: false", js)                          # куски видео копятся и в памяти, не только в IndexedDB
+        self.assertIn("VIDEO_TRIES", js)                               # отказ хаба не теряет видео сразу — запись ждёт следующего захода
+
+    @unittest.skipUnless(shutil.which("node"), "нужен node")
+    def test_recording_in_headless_chrome(self):
+        # настоящая запись: видео доходит файлом и после обычной остановки, и когда хаб перезапустился посреди загрузки
+        r = subprocess.run(["node", os.path.join(ROOT, "tests", "e2e", "run.mjs")], capture_output=True, text=True, timeout=600)
+        if r.returncode == 77:
+            self.skipTest("нет Chrome")
+        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-1000:])
+
     @unittest.skipUnless(shutil.which("node"), "нужен node")
     def test_scripts_parse_and_logic_holds(self):
         for name in ("main.js", "lib.js", "tick.js"):
