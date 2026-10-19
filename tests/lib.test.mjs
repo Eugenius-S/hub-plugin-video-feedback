@@ -1,7 +1,7 @@
 // Логика видео-фидбэка без браузера: фразы по паузам, кадры, текст сообщения. Запуск: node --test tests/
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FRAMES, VOICE, bundles, clock, count, diff, fresh, frameName, message, phrases, pick, sentSummary, zip } from "../lib.js";
+import { FRAMES, VOICE, bundles, clock, count, frameName, message, phrases, pick, sentSummary, zip } from "../lib.js";
 
 // громкость по времени: речь там, где [от, до)
 const run = (speech, until, step = 250) => {
@@ -51,26 +51,22 @@ test("шумный фон: речь — только заметно громче
   assert.equal(p.speaking(), true);
 });
 
-test("кадр — раз в секунду, когда экран сменился; тот же экран — не кадр", () => {
-  const a = new Uint8Array(576).fill(10), b = new Uint8Array(576).fill(200), c = new Uint8Array(576).fill(13);
-  assert.equal(diff(a, a), 0);
-  assert.ok(fresh(a, null));            // первого кадра ещё нет
-  assert.ok(fresh(b, a));               // сменился — кадр, даже если ещё едет (владелец 16.10: 12 кадров на 4,5 мин — мало)
-  assert.ok(!fresh(a, a));
-  assert.ok(!fresh(c, a));              // мелочь (курсор, мигание) — не кадр
-  assert.equal(FRAMES.every, 1000);
+test("кадр — каждые полсекунды безусловно: пропуска одинаковых экранов нет", () => {
+  assert.equal(FRAMES.every, 500);
+  assert.equal(1000 / FRAMES.every, 2);   // 250-мс часы: кадр на каждом втором тике
+  assert.equal(240e3 / FRAMES.every, 480);   // 4 минуты — 480 кадров, не 62 (владелец 19.10)
 });
 
 test("кадров не больше max: сначала начала фраз, длинные важнее; по времени", () => {
   const frames = [
-    { t: 100, kind: "change", phrase: 0 }, { t: 200, kind: "onset", phrase: 0 },
-    { t: 300, kind: "onset", phrase: 1 }, { t: 400, kind: "onset", phrase: 2 }, { t: 500, kind: "change", phrase: 2 },
+    { t: 100, kind: "tick", phrase: 0 }, { t: 200, kind: "onset", phrase: 0 },
+    { t: 300, kind: "onset", phrase: 1 }, { t: 400, kind: "onset", phrase: 2 }, { t: 500, kind: "tick", phrase: 2 },
   ];
   assert.deepEqual(pick(frames, [1000, 9000, 500], 3).map((f) => f.t), [200, 300, 400]);
   assert.deepEqual(pick(frames, [1000, 9000, 500], 2).map((f) => f.t), [200, 300]);
   assert.equal(pick(frames, [], 12).length, 5);
   // без фраз (или после начал фраз) — остальные ровно по записи, не первые подряд
-  const ticks = Array.from({ length: 100 }, (_, i) => ({ t: i * 1000, kind: "change", phrase: 0 }));
+  const ticks = Array.from({ length: 100 }, (_, i) => ({ t: i * 1000, kind: "tick", phrase: 0 }));
   assert.deepEqual(pick(ticks, [], 4).map((f) => f.t), [0, 33000, 66000, 99000]);
 });
 
@@ -128,7 +124,12 @@ test("много кадров: в чат — max лучших, все — арх
 
 test("имя кадра в архиве — таймкод, совпадения — с номером", () => {
   const seen = new Set();
-  assert.deepEqual([65e3, 65400, 3725e3].map((t) => frameName(t, seen)), ["0-01-05.jpg", "0-01-05-2.jpg", "1-02-05.jpg"]);
+  assert.deepEqual([65e3, 65400, 65450, 3725e3].map((t) => frameName(t, seen)), ["0-01-05.0.jpg", "0-01-05.4.jpg", "0-01-05.4-2.jpg", "1-02-05.0.jpg"]);
+  // кадры каждые 500 мс — имена разные и в порядке времени
+  const all = new Set(), sorted = Array.from({ length: 480 }, (_, i) => frameName(i * 500, all));
+  assert.equal(all.size, 480);
+  assert.deepEqual(sorted.slice().sort(), sorted);
+  assert.equal(sorted[1], "0-00-00.5.jpg");
 });
 
 test("архивы — по размеру: каждый не больше предела, порядок сохраняется", () => {

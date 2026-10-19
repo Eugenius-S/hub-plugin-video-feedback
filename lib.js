@@ -9,9 +9,9 @@ export const VOICE = {
   idle: 20e3,         // тишина без речи — запись куска заново, чтобы не копить пустое
   onset: 400,         // кадр — через столько после начала фразы: экран уже тот, о котором речь
 };
-// кадр — раз в секунду (every), если экран сменился больше чем на same; в чат картинками — max лучших, все — архивом
-// (владелец 16.10: на 4,5 мин записи 12 кадров — мимо прошло много указаний)
-export const FRAMES = { max: 12, same: 0.02, every: 1000, part: 18 * 1024 * 1024 };
+// кадр — каждые every мс безусловно (владелец 19.10: на 4 мин записи 62 кадра — «капец как мало», нужен раз в полсекунды);
+// в чат картинками — max лучших, все — архивом
+export const FRAMES = { max: 12, every: 500, part: 18 * 1024 * 1024 };
 export const MAX_MS = 10 * 60e3;
 
 // Фразы. step(t, rms) → что сделать сейчас: {cut: фраза или null, restart, frame: "onset" | null}.
@@ -48,19 +48,8 @@ export function phrases(v = VOICE) {
   };
 }
 
-// отпечаток экрана — яркость 32×18; разница — доля от 0 до 1
-export function diff(a, b) {
-  if (!a || !b || a.length !== b.length) return 1;
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
-  return s / a.length / 255;
-}
-
-// экран сменился с последнего кадра — пора снять новый
-export const fresh = (sig, keptSig, f = FRAMES) => !keptSig || diff(sig, keptSig) >= f.same;
-
-// кадры: [{t, kind: "onset" | "change", phrase}] → не больше max картинками; сначала начала фраз (длинные фразы важнее),
-// оставшиеся места — смены ровно по всей записи (остальное — в архиве)
+// кадры: [{t, kind: "onset" | "tick", phrase}] → не больше max картинками; сначала начала фраз (длинные фразы важнее),
+// оставшиеся места — кадры ровно по всей записи (остальное — в архиве)
 export function pick(frames, lengths, max = FRAMES.max) {
   const byT = (a, b) => a.t - b.t;
   const onsets = frames.filter((f) => f.kind === "onset")
@@ -84,10 +73,11 @@ export function sentSummary(phrasesN, framesN) {
   return "Отправлено: " + parts.filter(Boolean).join(", ");
 }
 
-// имя кадра в архиве — таймкод ч-мм-сс (сортируется по времени), в ту же секунду второй — с номером
+// имя кадра в архиве — таймкод ч-мм-сс.д (десятые секунды; сортируется по времени), в ту же десятую второй — с номером
 export function frameName(t, seen) {
-  const s = Math.max(0, Math.floor(t / 1000));
-  const base = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((x, i) => (i ? String(x).padStart(2, "0") : x)).join("-");
+  const d = Math.max(0, Math.floor(t / 100));
+  const s = Math.floor(d / 10);
+  const base = [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((x, i) => (i ? String(x).padStart(2, "0") : x)).join("-") + `.${d % 10}`;
   let name = `${base}.jpg`;
   for (let k = 2; seen.has(name); k++) name = `${base}-${k}.jpg`;
   seen.add(name);
@@ -166,8 +156,8 @@ export function message({ length, phrases: list, frames, voice, audio, cut, vide
   const tail = [];
   if (!list.length) tail.push(voice ? "Голоса в записи нет, только кадры." : "Расшифровка голоса в хабе не настроена, есть только кадры.");
   else if (!voice) tail.push("Расшифровка голоса в хабе не настроена, фразы без текста.");
-  if (archive?.paths?.length) tail.push(`Все ${count(archive.count, ["кадр", "кадра", "кадров"])} записи (раз в секунду, когда менялся экран; `
-    + `имя — таймкод ч-мм-сс) — ${archive.paths.length > 1 ? "архивы" : "архив"} ${archive.paths.map((x) => `\`${x}\``).join(", ")}. `
+  if (archive?.paths?.length) tail.push(`Все ${count(archive.count, ["кадр", "кадра", "кадров"])} записи (каждые полсекунды; `
+    + `имя — таймкод ч-мм-сс.д, десятые секунды) — ${archive.paths.length > 1 ? "архивы" : "архив"} ${archive.paths.map((x) => `\`${x}\``).join(", ")}. `
     + "Распакуй во временную папку (`python -m zipfile -e <архив> <папка>`), смотри кадры на отрезке каждой фразы и между ними — "
     + "там указания, которых нет в картинках выше. Разобрал — удали архив и папку.");
   if (cut) tail.push("Запись оборвалась: страница закрылась или обновилась посреди неё, договорённое после последней фразы есть только в звуке.");

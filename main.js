@@ -1,14 +1,15 @@
 // Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
-// расшифровка по фразам и кадры экрана в моменты, о которых говорил (не больше 12 картинками), а все кадры — раз в
-// секунду, когда менялся экран, — архивом. Само видео нигде не пишется: на диск ложатся только кадры. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
+// расшифровка по фразам и кадры экрана в моменты, о которых говорил (не больше 12 картинками), а все кадры — каждые
+// полсекунды, безусловно, — архивом. Само видео нигде не пишется: на диск ложатся только кадры. Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
 // До подтверждения доставки фразы, кадры, звук и видео экрана лежат в IndexedDB вкладки (запись на диск — strict:
 // переживает и выключение света): перезапуск хаба или обновление страницы их не теряет — отправка повторяется, после
 // перезагрузки досылается сама (16.10: 3 минуты записи пропали при перезапуске хаба). Видео в хаб уходит, только если
 // запись оборвалась (страницу закрыли посреди неё), — иначе удаляется вместе с записью после доставки.
-import { FRAMES, MAX_MS, VOICE, bundles, clock, diff, frameName, fresh, message, phrases, pick, sentSummary, zip } from "./lib.js";
+import { FRAMES, MAX_MS, VOICE, bundles, clock, frameName, message, phrases, pick, sentSummary, zip } from "./lib.js";
 
 const COUNT = 3;
-const EDGE = 1568, PIXELS = 1.15e6;   // больше этого модель кадр всё равно уменьшит: лишнее — только вес файла
+// кадров по два в секунду, 10 минут — 1200 штук: JPEG сжат так, чтобы текст на экране читался, а архив не раздувался
+const EDGE = 1280, PIXELS = 0.95e6, QUALITY = 0.6;
 const TICK = 250;
 
 let R = null;          // идущая запись: {phase: "count" | "rec" | "work", key, ...}
@@ -160,10 +161,9 @@ function record() {
   r.videoN = 0;
   r.io = Promise.resolve();
   r.list = [];          // фразы: {from, speech, to, text}
-  r.frames = [];        // кадры: {t, kind, phrase, blob, sig}
+  r.frames = [];        // кадры: {t, kind, phrase, blob, n}
   r.jobs = Promise.resolve();
   r.grab = grabber(r.screen.getVideoTracks()[0]);
-  r.keptSig = null;
   r.ticks = 0;
   r.title = document.title;
   if (r.mic) {
@@ -229,13 +229,9 @@ async function tick(r) {
       if (step.cut) hear(r, step.cut, blob);
     }
   }
-  if (r.ticks % (FRAMES.every / TICK) === 0 && !r.busySig) {   // раз в секунду: экран сменился с прошлого кадра — кадр
-    r.busySig = true;
-    try {
-      const { sig } = await r.grab(false);
-      if (sig && fresh(sig, r.keptSig)) await shoot(r, performance.now() - r.t0, "change");
-    } catch { /* кадр не снялся — следующий через секунду */ }
-    r.busySig = false;
+  if (r.ticks % (FRAMES.every / TICK) === 0 && !r.busyShot) {   // каждые полсекунды — кадр, даже если экран не менялся
+    r.busyShot = true;
+    try { await shoot(r, t, "tick"); } finally { r.busyShot = false; }
   }
 }
 
@@ -260,27 +256,19 @@ async function transcribe(p) {
 async function shoot(r, t, kind) {
   const phrase = r.list.length;   // фраза, что идёт сейчас
   try {
-    const { sig, blob } = await r.grab(true);
-    if (r.keptSig && diff(sig, r.keptSig) < FRAMES.same) {   // тот же экран — второй кадр не нужен
-      const last = r.frames.at(-1);   // но начало фразы — у того, что уже снят: в чат он пойдёт первым
-      if (kind === "onset" && last && last.kind !== "onset") { last.kind = "onset"; last.phrase = phrase; saveMeta(r); }
-      return;
-    }
-    r.keptSig = sig;
+    const blob = await r.grab();
+    if (!blob) return;
     const n = r.frameN++;
     r.frames.push({ t, kind, phrase, blob, n });
-    put(r, `${r.id}/f/${pad(n)}`, blob).then(() => saveMeta(r));
+    put(r, `${r.id}/f/${pad(n)}`, blob);   // описание кадров — saveMeta раз в 5 с и при остановке, не 2 раза в секунду
   } catch { /* без этого кадра */ }
 }
 
-// снимок экрана: отпечаток 32×18 и, если надо, JPEG с длинной стороной до EDGE
+// снимок экрана: JPEG с длинной стороной до EDGE
 function grabber(track) {
   const cap = "ImageCapture" in window ? new ImageCapture(track) : null;
   let video = null;
-  const small = document.createElement("canvas");
-  small.width = 32; small.height = 18;
-  const sctx = small.getContext("2d", { willReadFrequently: true });
-  return async (full) => {
+  return async () => {
     let src;
     if (cap) src = await cap.grabFrame();
     else {
@@ -288,20 +276,13 @@ function grabber(track) {
       src = video;
     }
     const w = src.width || src.videoWidth, h = src.height || src.videoHeight;
-    sctx.drawImage(src, 0, 0, 32, 18);
-    const px = sctx.getImageData(0, 0, 32, 18).data;
-    const sig = new Uint8Array(32 * 18);
-    for (let i = 0; i < sig.length; i++) sig[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
-    let blob = null;
-    if (full) {
-      const k = Math.min(1, EDGE / Math.max(w, h), Math.sqrt(PIXELS / (w * h)));
-      const c = document.createElement("canvas");
-      c.width = Math.round(w * k); c.height = Math.round(h * k);
-      c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
-      blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.82));
-    }
+    if (!w || !h) return null;
+    const k = Math.min(1, EDGE / Math.max(w, h), Math.sqrt(PIXELS / (w * h)));
+    const c = document.createElement("canvas");
+    c.width = Math.round(w * k); c.height = Math.round(h * k);
+    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
     src.close?.();
-    return { sig, blob };
+    return new Promise((ok) => c.toBlob(ok, "image/jpeg", QUALITY));
   };
 }
 

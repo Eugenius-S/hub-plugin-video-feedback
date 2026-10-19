@@ -40,6 +40,7 @@ class Source(unittest.TestCase):
         self.assertIn("const COUNT = 3", js)                           # запись — через 3 секунды
         self.assertIn('"/api/voice"', js)                              # распознаёт модуль «Голос» хаба
         self.assertIn('new Worker(hubRef.url("tick.js"))', js)         # часы — не таймер вкладки (её притормаживают)
+        self.assertNotIn("fresh(", js)                                 # кадр каждые 500 мс безусловно, без сравнения экранов
 
     @unittest.skipUnless(shutil.which("node"), "нужен node")
     def test_scripts_parse_and_logic_holds(self):
