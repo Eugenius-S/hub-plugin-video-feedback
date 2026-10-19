@@ -109,6 +109,8 @@ test("оборванная запись с видео: пути видео, ча
   const two = message({ length: 5000, voice: true, frames: [], phrases: [], cut: true, video: ["C:/a/v-1of2.webm", "C:/a/v-2of2.webm"] });
   assert.match(two, /частями .*`C:\/a\/v-1of2\.webm`, `C:\/a\/v-2of2\.webm`/);
   assert.doesNotMatch(message({ length: 5000, voice: true, frames: [], phrases: [] }), /Видео экрана/);
+  assert.match(one, /Разобрал — удали файл/);
+  assert.match(two, /Разобрал — удали все части/);
 });
 
 test("много кадров: в чат — max лучших, все — архивом; путь, таймкоды и что удалить после разбора", () => {

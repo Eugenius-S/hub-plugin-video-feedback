@@ -164,7 +164,7 @@ export function message({ length, phrases: list, frames, voice, audio, cut, vide
   if (audio) tail.push(`${cut ? "Звук" : "Текста фраз нет, звук"} записи сохранён: \`${audio}\`. Расшифруй его — \`hub voice transcribe --remove "${audio}"\` `
     + "(файл удалится после расшифровки) — и разбери по тем же таймкодам.");
   if (video?.length) tail.push(video.length > 1
-    ? `Видео экрана сохранено частями (по порядку, склей байт в байт в один .webm): ${video.map((v) => `\`${v}\``).join(", ")}.`
-    : `Видео экрана сохранено: \`${video[0]}\`.`);
+    ? `Видео экрана сохранено частями (по порядку, склей байт в байт в один .webm): ${video.map((v) => `\`${v}\``).join(", ")}. Разобрал — удали все части.`
+    : `Видео экрана сохранено: \`${video[0]}\`. Разобрал — удали файл.`);
   return [head, "", ...lines, ...loose, ...(tail.length ? ["", ...tail] : [])].join("\n");
 }
