@@ -36,11 +36,18 @@ class Source(unittest.TestCase):
         self.assertIn("await forget(job.id)", js)                      # после доставки — стереть
         self.assertIn("data-hub-hold", js)                             # страница не обновляется посреди записи
         self.assertIn("vf-trash", js)                                  # корзина: удалить, не отправлять
-        self.assertIn('"composer.tools"', js)                          # значок — в поле ввода, рядом с микрофоном
+        self.assertIn('"session.composer"', js)                        # значок — над полем ввода (место есть в API хаба 1.27)
+        self.assertNotIn("composer.tools", js)                         # такого места у хаба нет — плагин не грузился
         self.assertIn("const COUNT = 3", js)                           # запись — через 3 секунды
         self.assertIn('"/api/voice"', js)                              # распознаёт модуль «Голос» хаба
         self.assertIn('new Worker(hubRef.url("tick.js"))', js)         # часы — не таймер вкладки (её притормаживают)
         self.assertNotIn("fresh(", js)                                 # кадр каждые 500 мс безусловно, без сравнения экранов
+
+    def test_empty_recording_is_not_a_failed_delivery(self):
+        # запись без голоса и кадров стирается и не должна ни показывать «Не отправилось», ни попадать в недоставленные
+        js = read("main.js")
+        self.assertNotIn('throw new Error("в записи нет ни голоса, ни кадров")', js)
+        self.assertIn("ничего не отправлено", js)
 
     def test_video_is_always_sent(self):
         # 19.10 (d68760): 0.3–0.5 слали видео только оборванной записи — после обычной остановки в тексте было «Видео не сохранилось»

@@ -1,4 +1,7 @@
 /* Видео-фидбэк: значок рядом с микрофоном; отсчёт, идёт запись (точка и время), расшифровка */
+/* у хаба место над полем ввода — div с классом .composer (рамка поля): со значком внутри это тулбар, не второе поле */
+.slot-host.composer:has(> .vf-slot) { border: 0; background: none; box-shadow: none; padding: 0; cursor: default; }
+.vf-slot { display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding: 0 var(--space-2, 8px); }
 .vf-btn .icon { width: 22px; height: 22px; }
 .btn.round.vf-btn.vf-count { color: var(--primary); }
 .vf-num { font: 600 var(--text-md, 16px)/1 var(--font-ui, inherit); font-variant-numeric: tabular-nums; }

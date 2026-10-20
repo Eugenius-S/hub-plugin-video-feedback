@@ -144,6 +144,7 @@ async function normal() {
     await b.ev("window.__root.querySelector('.vf-btn').click()");
     await until(() => h.sends.length, "сообщение в чат");
     const text = h.sends[0].text;
+    check(h.sends[0].session === "chat" && h.sends[0].attachments?.length > 0, "сообщение — как у /api/send: session и attachments");
     const vids = videos(h);
     check(vids.length === 1, `видео загружено одним файлом (${vids.length})`);
     check(vids.length === 1 && isWebm(vids[0].path), "это настоящий webm");
