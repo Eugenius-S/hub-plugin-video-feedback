@@ -43,6 +43,12 @@ class Source(unittest.TestCase):
         self.assertIn('new Worker(hubRef.url("tick.js"))', js)         # часы — не таймер вкладки (её притормаживают)
         self.assertNotIn("fresh(", js)                                 # кадр каждые 500 мс безусловно, без сравнения экранов
 
+    def test_empty_recording_is_not_a_failed_delivery(self):
+        # запись без голоса и кадров стирается и не должна ни показывать «Не отправилось», ни попадать в недоставленные
+        js = read("main.js")
+        self.assertNotIn('throw new Error("в записи нет ни голоса, ни кадров")', js)
+        self.assertIn("ничего не отправлено", js)
+
     def test_video_is_always_sent(self):
         # 19.10 (d68760): 0.3–0.5 слали видео только оборванной записи — после обычной остановки в тексте было «Видео не сохранилось»
         js = read("main.js")

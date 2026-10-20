@@ -361,7 +361,12 @@ async function deliver(job, ctx) {
     if (job.voice) for (const p of job.list) if (!p.text && p.blob) await transcribe(p);
     const lengths = job.list.map((p) => p.to - p.speech);
     const frames = pick(job.frames, lengths);
-    if (!frames.length && !job.list.length) { await forget(job.id); throw new Error("в записи нет ни голоса, ни кадров"); }
+    if (!frames.length && !job.list.length) {   // пустая запись: стёрта, слать нечего — не «Не отправилось» и не в недоставленные
+      await forget(job.id);
+      pending = pending.filter((x) => x.id !== job.id);
+      banner("В записи нет ни голоса, ни кадров — ничего не отправлено", 6000);
+      return false;
+    }
     const sent = (job.sent = job.sent || { metas: [], audio: null, audioDone: false });
     for (const [i, f] of frames.entries()) {
       if (sent.metas[i]) continue;
