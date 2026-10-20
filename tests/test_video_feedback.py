@@ -36,7 +36,8 @@ class Source(unittest.TestCase):
         self.assertIn("await forget(job.id)", js)                      # после доставки — стереть
         self.assertIn("data-hub-hold", js)                             # страница не обновляется посреди записи
         self.assertIn("vf-trash", js)                                  # корзина: удалить, не отправлять
-        self.assertIn('"composer.tools"', js)                          # значок — в поле ввода, рядом с микрофоном
+        self.assertIn('"session.composer"', js)                        # значок — над полем ввода (место есть в API хаба 1.27)
+        self.assertNotIn("composer.tools", js)                         # такого места у хаба нет — плагин не грузился
         self.assertIn("const COUNT = 3", js)                           # запись — через 3 секунды
         self.assertIn('"/api/voice"', js)                              # распознаёт модуль «Голос» хаба
         self.assertIn('new Worker(hubRef.url("tick.js"))', js)         # часы — не таймер вкладки (её притормаживают)

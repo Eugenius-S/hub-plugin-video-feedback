@@ -33,19 +33,21 @@ const hub = {
   addStyle() {},
   el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; },
   async post(path, body) {
+    if (path === "/api/send") path = "/__send";
     try {
       const r = await fetch(path, { method: "POST", headers: { "X-Hub": "1" }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
       return r.ok ? { data: j } : { error: j.error || `http ${r.status}` };
     } catch (e) { return { error: String(e) }; }
   },
-  addSlot(place, spec) { window.__slot = spec; },
+  addSlot(place, spec) { if (place !== "session.composer") throw new Error(`нет места ${place}`); window.__slot = spec; },
 };
 const { default: register } = await import("/main.js");
 register(hub);
 const root = document.createElement("div");
 document.body.append(root);
-const ctx = { key: "chat", send: (text, metas) => hub.post("/__send", { text, metas }) };
+// как у хаба 1.27: место session.composer получает ctx {session}; отправка — POST /api/send
+const ctx = { session: { name: "chat", state: "idle" } };
 window.__ctx = ctx;
 window.__root = root;
 window.__slot.render(root, { voice: true }, ctx);

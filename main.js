@@ -30,9 +30,12 @@ export default function register(hub) {
   // запись или отправка — уход со страницы спросит (а обновление на новую версию хаба подождёт метку data-hub-hold)
   addEventListener("beforeunload", (e) => { if (R && R.phase !== "count") { e.preventDefault(); e.returnValue = ""; } });
   scan();
-  hub.addSlot("composer.tools", {
+  // место «session.composer» (над полем ввода открытой сессии): API хаба 1.27 даёт ctx {session}, а не {key, send}
+  hub.addSlot("session.composer", {
     id: "rec",
-    render(root, snap, ctx) {
+    render(root, snap, { session }) {
+      const ctx = chatCtx(session);
+      root.classList.add("vf-slot");
       root.__ctx = ctx;
       let b = root.__btn;
       if (!b) {
@@ -54,6 +57,14 @@ export default function register(hub) {
       if (!R) resume(ctx).catch(() => {});
     },
   });
+}
+
+// чат записи: ключ — имя сессии (как у записей прежних версий в IndexedDB), отправка — обычное сообщение владельца
+function chatCtx(session) {
+  const name = session.name;
+  return { key: name, session: name,
+    send: (text, attachments) => hubRef.post("/api/send", { session: name, text, attachments,
+      ...(session.state === "asleep" && session.retired ? { wake: true } : {}) }) };
 }
 
 function paint(b, key) {
