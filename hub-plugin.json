@@ -1,10 +1,16 @@
 {
   "name": "video-feedback",
   "icon": "icon.png",
-  "description": "Давайте хабу фидбэк видео: нажмите камеру рядом с микрофоном, и через 3 секунды начнётся запись экрана с голосом. Когда остановите, хаб соберёт из речи и ключевых кадров фидбэк по пунктам, а само видео ляжет файлом рядом. Токенов это тратит больше, чем текст, так что включайте, когда словами описывать долго",
-  "why": "Показать на экране и сказать вслух быстрее, чем расписывать текстом",
-  "version": "0.5.2",
+  "description": "Give the hub video feedback: press the camera next to the microphone and, 3 seconds later, the screen and your voice start recording. When you stop, the hub turns the speech and key frames into feedback by points, and the video itself lands as a file alongside. It spends more tokens than text, so switch it on when describing in words would take long",
+  "why": "Showing on screen and saying it aloud is faster than writing it out",
+  "version": "0.6.0",
   "hub": "^1.10",
   "web": "main.js",
-  "needs": ["voice"]
+  "needs": ["voice"],
+  "i18n": {
+    "ru": {
+      "description": "Давайте хабу фидбэк видео: нажмите камеру рядом с микрофоном, и через 3 секунды начнётся запись экрана с голосом. Когда остановите, хаб соберёт из речи и ключевых кадров фидбэк по пунктам, а само видео ляжет файлом рядом. Токенов это тратит больше, чем текст, так что включайте, когда словами описывать долго",
+      "why": "Показать на экране и сказать вслух быстрее, чем расписывать текстом"
+    }
+  }
 }

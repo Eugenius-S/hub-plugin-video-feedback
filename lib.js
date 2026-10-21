@@ -1,21 +1,22 @@
-// Видео-фидбэк: чистая логика без браузера — фразы по паузам в голосе, выбор кадров, текст сообщения.
-// main.js кормит её замерами (громкость, отпечаток экрана) и делает то, что она решила.
+// Video feedback: pure logic with no browser — phrases by voice pauses, frame choice, the message text.
+// main.js feeds it measurements (loudness, screen fingerprint) and does what it decided.
+import { tr } from "./strings.js";
 
 export const VOICE = {
-  floor: 0.012,       // тише этого — тишина при любом шуме
-  over: 3,            // речь — громче фона в столько раз
-  pause: 900,         // столько тишины после речи — фраза кончилась
-  maxPhrase: 45e3,    // длиннее не бывает: режем
-  idle: 20e3,         // тишина без речи — запись куска заново, чтобы не копить пустое
-  onset: 400,         // кадр — через столько после начала фразы: экран уже тот, о котором речь
+  floor: 0.012,       // quieter than this is silence whatever the noise
+  over: 3,            // speech is this many times louder than the background
+  pause: 900,         // this much silence after speech: the phrase is over
+  maxPhrase: 45e3,    // never longer than this: cut
+  idle: 20e3,         // silence with no speech: restart the piece so as not to pile up emptiness
+  onset: 400,         // the frame comes this long after the phrase begins: the screen is already the one being talked about
 };
-// кадр — каждые every мс безусловно;
-// в чат картинками — max лучших, все — архивом
+// a frame every `every` ms unconditionally;
+// the chat gets `max` best ones as pictures, all of them go in the archive
 export const FRAMES = { max: 12, every: 500, part: 18 * 1024 * 1024 };
 export const MAX_MS = 10 * 60e3;
 
-// Фразы. step(t, rms) → что сделать сейчас: {cut: фраза или null, restart, frame: "onset" | null}.
-// Кусок записи идёт непрерывно и режется только в тишине — первый слог не теряется.
+// Phrases. step(t, rms) -> what to do now: {cut: a phrase or null, restart, frame: "onset" | null}.
+// A piece of the recording runs continuously and is cut only in silence, so the first syllable is not lost.
 export function phrases(v = VOICE) {
   let floor = null, start = 0, speechAt = null, lastSpeech = 0, onsetTaken = false;
   return {
@@ -23,7 +24,7 @@ export function phrases(v = VOICE) {
     step(t, rms) {
       if (floor == null) floor = Math.min(rms, v.floor);
       const speaking = rms > Math.max(v.floor, floor * v.over);
-      // фон: вниз сразу, вверх — в тишине быстро, под речью еле-еле (иначе долгая фраза сама стала бы «фоном»)
+      // background: down at once, up quickly in silence, barely at all under speech (otherwise a long phrase would become "background")
       floor = rms < floor ? rms : floor + (rms - floor) * (speaking ? 0.002 : 0.05);
       const out = { cut: null, restart: false, frame: null };
       if (speaking) {
@@ -37,19 +38,19 @@ export function phrases(v = VOICE) {
         out.restart = true;
         this.begin(t);
       } else if (speechAt == null && t - start >= v.idle) {
-        out.restart = true;   // пустой кусок выбросить
+        out.restart = true;   // throw the empty piece away
         this.begin(t);
       }
       return out;
     },
-    // запись остановили: недоговорённая фраза — тоже фраза
+    // the recording was stopped: a half-said phrase is a phrase too
     finish(t) { return speechAt != null ? { from: start, speech: speechAt, to: t } : null; },
     speaking: () => speechAt != null,
   };
 }
 
-// кадры: [{t, kind: "onset" | "tick", phrase}] → не больше max картинками; сначала начала фраз (длинные фразы важнее),
-// оставшиеся места — кадры ровно по всей записи (остальное — в архиве)
+// frames: [{t, kind: "onset" | "tick", phrase}] -> at most max as pictures; phrase starts first (long phrases matter more),
+// the remaining places go to frames spread evenly over the whole recording (the rest is in the archive)
 export function pick(frames, lengths, max = FRAMES.max) {
   const byT = (a, b) => a.t - b.t;
   const onsets = frames.filter((f) => f.kind === "onset")
@@ -61,19 +62,21 @@ export function pick(frames, lengths, max = FRAMES.max) {
   return [...onsets, ...spread].sort(byT);
 }
 
-// 1 фраза, 3 кадра, 5 кадров
-export function count(n, [one, few, many]) {
+// "1 phrase, 3 frames, 5 frames": forms is [one, many] (en) or [one, few, many] (ru)
+export function count(n, forms) {
+  if (forms.length < 3) return `${n} ${n === 1 ? forms[0] : forms[forms.length - 1]}`;
+  const [one, few, many] = forms;
   const d = n % 10, h = n % 100;
   return `${n} ${d === 1 && h !== 11 ? one : d >= 2 && d <= 4 && (h < 12 || h > 14) ? few : many}`;
 }
 
-// «Отправлено: 5 фраз, 3 кадра»; нулевое не пишем
-export function sentSummary(phrasesN, framesN) {
-  const parts = [phrasesN && count(phrasesN, ["фраза", "фразы", "фраз"]), framesN && count(framesN, ["кадр", "кадра", "кадров"])];
-  return "Отправлено: " + parts.filter(Boolean).join(", ");
+// "Sent: 5 phrases, 3 frames"; a zero is not written
+export function sentSummary(phrasesN, framesN, lang) {
+  const parts = [phrasesN && count(phrasesN, tr(lang, "phrase_forms")), framesN && count(framesN, tr(lang, "frame_forms"))];
+  return tr(lang, "sent", { parts: parts.filter(Boolean).join(", ") });
 }
 
-// имя кадра в архиве — таймкод ч-мм-сс.д (десятые секунды; сортируется по времени), в ту же десятую второй — с номером
+// frame name in the archive: timecode h-mm-ss.t (tenths of a second; sorts by time), within the same tenth - with a number
 export function frameName(t, seen) {
   const d = Math.max(0, Math.floor(t / 100));
   const s = Math.floor(d / 10);
@@ -84,7 +87,7 @@ export function frameName(t, seen) {
   return name;
 }
 
-// [{size}] → группы по порядку, в каждой не больше limit (вложение хаба — до 20 МБ); больший один — сам по себе
+// [{size}] -> groups in order, each at most limit (a hub attachment is up to 20 MB); a bigger single one goes on its own
 export function bundles(items, limit) {
   const out = [];
   let cur = [], sum = 0;
@@ -97,7 +100,7 @@ export function bundles(items, limit) {
   return out;
 }
 
-// zip без сжатия (JPEG всё равно не жмётся): [{name, data: Uint8Array}] → Uint8Array; открывает любой unzip
+// zip without compression (JPEG does not compress anyway): [{name, data: Uint8Array}] -> Uint8Array; any unzip opens it
 const CRC = Array.from({ length: 256 }, (_, n) => {
   let c = n;
   for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
@@ -115,7 +118,7 @@ export function zip(files) {
   for (const f of files) {
     const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
     const h = head(0x04034b50, 30);
-    h.setUint16(4, 20, true); h.setUint16(6, 0x800, true);   // версия 2.0, имена в UTF-8
+    h.setUint16(4, 20, true); h.setUint16(6, 0x800, true);   // version 2.0, names in UTF-8
     h.setUint32(14, crc, true); h.setUint32(18, size, true); h.setUint32(22, size, true); h.setUint16(26, name.length, true);
     const c = head(0x02014b50, 46);
     c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x800, true);
@@ -140,31 +143,29 @@ export const clock = (ms) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-// текст сообщения: фразы по времени, у каждой — метки её кадров ([Image #N] — как вставленные картинки поля ввода)
-export function message({ length, phrases: list, frames, voice, audio, cut, video, archive }) {
-  const head = `Видео-фидбэк, ${clock(length)}. ${video?.length ? "Видео экрана — путь внизу" : "Видео не сохранилось"}, ниже мои слова по фразам и кадры экрана в эти `
-    + "моменты. Собери из этого мой фидбэк по пунктам: что не так и что я хочу.";
+// Message text (the session reads it), in the hub language: phrases by time, each with the marks of its frames
+// ([Image #N], like the pictures pasted into the input field). The format is the same in every language.
+export function message({ length, phrases: list, frames, voice, audio, cut, video, archive, lang }) {
+  const t = (key, vars) => tr(lang, key, vars);
+  const head = t("head", { len: clock(length), video: t(video?.length ? "head_video" : "head_novideo") });
   const lines = [];
   let n = 0;
   const label = new Map(frames.map((f) => [f, `[Image #${++n}]`]));
   list.forEach((p, i) => {
     const mine = frames.filter((f) => f.phrase === i).map((f) => label.get(f));
-    const said = p.text ? `«${p.text}»` : voice ? "(неразборчиво)" : "(без расшифровки)";
+    const said = p.text ? t("said", { text: p.text }) : t(voice ? "unclear" : "no_text");
     lines.push(`${clock(p.speech)} ${said}${mine.length ? " " + mine.join(" ") : ""}`);
   });
   const loose = frames.filter((f) => f.phrase == null || f.phrase >= list.length).map((f) => `${clock(f.t)} ${label.get(f)}`);
   const tail = [];
-  if (!list.length) tail.push(voice ? "Голоса в записи нет, только кадры." : "Расшифровка голоса в хабе не настроена, есть только кадры.");
-  else if (!voice) tail.push("Расшифровка голоса в хабе не настроена, фразы без текста.");
-  if (archive?.paths?.length) tail.push(`Все ${count(archive.count, ["кадр", "кадра", "кадров"])} записи (каждые полсекунды; `
-    + `имя — таймкод ч-мм-сс.д, десятые секунды) — ${archive.paths.length > 1 ? "архивы" : "архив"} ${archive.paths.map((x) => `\`${x}\``).join(", ")}. `
-    + "Распакуй во временную папку (`python -m zipfile -e <архив> <папка>`), смотри кадры на отрезке каждой фразы и между ними — "
-    + "там указания, которых нет в картинках выше. Разобрал — удали архив и папку.");
-  if (cut) tail.push("Запись оборвалась: страница закрылась или обновилась посреди неё, договорённое после последней фразы есть только в звуке.");
-  if (audio) tail.push(`${cut ? "Звук" : "Текста фраз нет, звук"} записи сохранён: \`${audio}\`. Расшифруй его — \`hub voice transcribe --remove "${audio}"\` `
-    + "(файл удалится после расшифровки) — и разбери по тем же таймкодам.");
+  if (!list.length) tail.push(t(voice ? "no_voice" : "voice_off_frames"));
+  else if (!voice) tail.push(t("voice_off_phrases"));
+  if (archive?.paths?.length) tail.push(t("archive", { frames: count(archive.count, tr(lang, "frame_forms")),
+    kind: t(archive.paths.length > 1 ? "archive_many" : "archive_one"), paths: archive.paths.map((x) => `\`${x}\``).join(", ") }));
+  if (cut) tail.push(t("cut"));
+  if (audio) tail.push(t(cut ? "audio_cut" : "audio_nophrases", { path: audio }));
   if (video?.length) tail.push(video.length > 1
-    ? `Видео экрана сохранено частями (по порядку, склей байт в байт в один .webm): ${video.map((v) => `\`${v}\``).join(", ")}. Разобрал — удали все части.`
-    : `Видео экрана сохранено: \`${video[0]}\`. Разобрал — удали файл.`);
+    ? t("video_parts", { paths: video.map((v) => `\`${v}\``).join(", ") })
+    : t("video_one", { path: video[0] }));
   return [head, "", ...lines, ...loose, ...(tail.length ? ["", ...tail] : [])].join("\n");
 }

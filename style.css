@@ -1,4 +1,4 @@
-/* Видео-фидбэк: значок рядом с микрофоном; отсчёт, идёт запись (точка и время), расшифровка */
+/* Video feedback: the icon next to the microphone; countdown, recording in progress (dot and time), transcription */
 .vf-btn .icon { width: 22px; height: 22px; }
 .btn.round.vf-btn.vf-count { color: var(--primary); }
 .vf-num { font: 600 var(--text-md, 16px)/1 var(--font-ui, inherit); font-variant-numeric: tabular-nums; }

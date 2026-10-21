@@ -1,41 +1,39 @@
-# Видео-фидбэк: плагин Agents Hub
+# Video feedback: an Agents Hub plugin
 
-Давайте хабу фидбэк видео: показываете на экране и говорите, а хаб сам вытаскивает, что не так и что вы хотите.
+Give the hub feedback as a video: you show things on the screen and talk, and the hub works out by itself what is wrong and what you want.
 
-## Как это работает
+## How it works
 
-1. Нажмите камеру рядом с микрофоном в поле ввода и выберите экран или окно.
-2. Через 3 секунды начнётся запись экрана и голоса, на значке пойдёт время. Остановить можно тем же значком или кнопкой «Закрыть доступ» в полосе браузера. Через 10 минут запись остановится сама. Наговорили не то — корзина рядом со значком: запись удалится, в чат ничего не уйдёт.
-3. Хаб разбирает речь по фразам и каждые полсекунды снимает кадр экрана (даже если он не менялся). В чат одним сообщением уходят фразы и до 12 главных кадров картинками (в начале каждой фразы), а все кадры — zip-архивом (частями до 18 МБ, имя кадра — таймкод). Сессия распаковывает архив, собирает фидбэк по пунктам и удаляет архив.
+1. Press the camera next to the microphone in the input field and pick a screen or a window.
+2. After 3 seconds the screen and voice recording starts and the time runs on the icon. You can stop with the same icon or with the "Stop sharing" button in the browser bar. After 10 minutes the recording stops by itself. Said the wrong thing - the bin next to the icon deletes the recording, nothing goes to the chat.
+3. The hub splits the speech into phrases and takes a screen frame every half second (even if the screen did not change). One chat message carries the phrases and up to 12 main frames as pictures (at the start of each phrase), and all the frames go as a zip archive (in parts up to 18 MB, a frame is named by its timecode). The session unpacks the archive, assembles the feedback by points and deletes the archive.
 
-Само видео экрана (250 кбит/с, 10 минут — около 19 МБ) тоже доходит всегда: файлом `screen-video.webm`, частями до 18 МБ, если длинное; путь — в сообщении. Сессия смотрит видео для разбора и после удаляет файл (и все части). Если у фраз нет текста (голос не настроен, ошибка), в хаб
-уходит и звук записи — до расшифровки: `hub voice transcribe --remove <звук>` (путь есть в сообщении) расшифрует его
-и удалит файл.
+The screen video itself (250 kbit/s, 10 minutes is about 19 MB) always arrives too: as the file `screen-video.webm`, in parts up to 18 MB if it is long; the path is in the message. The session watches the video for the review and deletes the file (and all the parts) afterwards. If the phrases have no text (voice is not set up, or an error), the recording audio goes to the hub as well, before transcription: `hub voice transcribe --remove <audio>` (the path is in the message) transcribes it and deletes the file.
 
-Пока хаб не принял сообщение, фразы, кадры, звук и видео экрана лежат в браузере (IndexedDB этой вкладки, с записью на диск сразу — переживут и выключение компьютера). Хаб перезапустился во время отправки — отправка повторяется до 5 минут. Страницу обновили или закрыли — после загрузки она дошлёт запись сама, когда откроется тот же чат; оборванная посреди записи уйдёт со звуком и видео экрана. Видео из записи не пропадает и при перезапуске хаба посреди загрузки: каждая часть повторяется, пока хаб не примет; хаб не отвечал дольше повторов — запись остаётся в браузере и досылается при следующем заходе (после трёх таких заходов сообщение уйдёт без видео). После доставки всё это из браузера стирается. Пока идёт запись или отправка, страница не обновляется сама на новую версию хаба, а уход с неё браузер переспросит.
+Until the hub accepts the message, the phrases, frames, audio and screen video are kept in the browser (IndexedDB of this tab, written to disk at once, so they survive even a power-off). If the hub restarted during sending, sending is retried for up to 5 minutes. If the page was reloaded or closed, after loading it sends the recording by itself when the same chat is opened; a recording cut off in the middle goes with its audio and screen video. The video is not lost when the hub restarts in the middle of an upload either: each part is retried until the hub accepts it; if the hub did not answer for longer than the retries, the recording stays in the browser and is sent on the next visit (after three such visits the message goes without the video). After delivery all of this is erased from the browser. While a recording or sending is in progress, the page does not reload itself for a new hub version, and leaving it makes the browser ask.
 
-## Токены
+## Language
 
-Видео-фидбэк тратит заметно больше токенов, чем текст. Минута записи выходит примерно в 5–10 тыс. токенов, а минута тех же слов текстом в 400. Не злоупотребляйте: если хватит пары строк, напишите их. Видео нужно, когда показать проще, чем описать.
+The plugin's texts - the button hints, banners and the message sent to the session - are in English by default and in Russian when the hub language is Russian. The message keeps the same format in both languages (`[Image #N]` marks, timecodes, file paths and the `hub voice transcribe` command).
 
-## Поставить
+## Tokens
 
-«Настройки» → «Плагины» → вставить ссылку на этот репозиторий → «Проверить и поставить». Нужны:
+Video feedback spends noticeably more tokens than text. A minute of recording comes to about 5-10 thousand tokens, while the same words as text are about 400 a minute. Do not overuse it: if a couple of lines are enough, write them. Video is for when showing is easier than describing.
 
-- хаб с местом `composer.tools` (кнопка в поле ввода) — дополнение к Plugin API, в общем хабе его пока нет: без него значок не появится;
-- модуль «Голос» хаба (`voice.cmd` в hub.json) — тот же, что у микрофона; не настроен — хаб ставит расшифровку речи сам при установке плагина (`"needs": ["voice"]`, `hub voice setup`), пока она ставится, уйдут только кадры;
-- Chrome или Edge на компьютере (на телефоне записи экрана нет — значка тоже нет). На macOS браузеру один раз нужно
-  разрешение «Запись экрана» в «Конфиденциальность и безопасность».
+## Install
 
-## Как устроено
+Settings -> Plugins -> paste the link to this repository -> "Check and install". Required:
 
-Голос пишется кусками, которые режутся в паузах: закончилась фраза — она сразу уходит на распознавание в `/api/voice`,
-пока запись идёт дальше. Каждые полсекунды страница снимает кадр экрана — безусловно, даже если он не менялся
-(4 минуты записи — около 480 кадров). Кадр — JPEG до 1280 px по длинной стороне, качество 0,6: текст читается, а архив не
-раздувается (кадры лежат в IndexedDB до доставки, по 60–150 КБ каждый). Через 0,4 с после начала фразы — ещё кадр: он идёт в чат картинкой первым. Часы записи — в отдельном потоке (`tick.js`): вкладку хаба, которая не на виду, браузер притормаживает.
+- a hub with the `composer.tools` slot (a button in the input field) - an addition to the Plugin API, not in the common hub yet: without it the icon does not appear;
+- the hub's Voice module (`voice.cmd` in hub.json) - the same one the microphone uses; if it is not set up, the hub sets up speech transcription by itself when the plugin is installed (`"needs": ["voice"]`, `hub voice setup`), and while it is being installed only frames go out;
+- Chrome or Edge on a computer (a phone cannot record the screen, so there is no icon either). On macOS the browser needs the "Screen Recording" permission once, in "Privacy & Security".
 
-## Тесты
+## Internals
 
-`python3 -m unittest discover -s tests` — манифест и логика (`node --test`), без хаба и браузера; плюс запись в настоящем headless Chrome (холст вместо экрана, осциллятор вместо микрофона, хаб-подделка, перезапуск хаба посреди загрузки): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording]`. Chrome — из `VF_CHROME` или обычных мест; нет его — тест пропускается.
+The voice is recorded in pieces that are cut at pauses: when a phrase ends it goes to recognition at once, in `/api/voice`, while the recording goes on. Every half second the page takes a screen frame - unconditionally, even if the screen did not change (4 minutes of recording is about 480 frames). A frame is a JPEG up to 1280 px on the long side, quality 0.6: text is readable and the archive does not bloat (frames sit in IndexedDB until delivery, 60-150 KB each). 0.4 s after a phrase starts there is one more frame: it goes to the chat first, as a picture. The recording clock runs in a separate thread (`tick.js`): the browser throttles a hub tab that is out of sight.
 
-Иконка — [3D Fluency](https://icons8.com/icons/3d-fluency) от Icons8.
+## Tests
+
+`python3 -m unittest discover -s tests` - the manifest and the logic (`node --test`), with no hub and no browser; plus a recording in a real headless Chrome (a canvas instead of the screen, an oscillator instead of the microphone, a fake hub, a hub restart in the middle of an upload): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording|russian]`. Chrome comes from `VF_CHROME` or the usual places; without it the test is skipped. The e2e uses its own throwaway Chrome profile and a random debugging port.
+
+Icon — [3D Fluency](https://icons8.com/icons/3d-fluency) by Icons8.

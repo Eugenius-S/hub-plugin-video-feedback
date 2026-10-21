@@ -1,33 +1,40 @@
-// Видео-фидбэк: значок рядом с микрофоном → выбор экрана → через 3 с запись экрана и голоса. Остановил — в чат уходит
-// расшифровка по фразам и кадры экрана в моменты, о которых говорил (не больше 12 картинками), а все кадры — каждые
-// полсекунды, безусловно, — архивом, и само видео экрана файлом (частями до 18 МБ). Распознаёт голос модуль «Голос» хаба (/api/voice) — пока идёт запись.
-// До подтверждения доставки фразы, кадры, звук и видео экрана лежат в IndexedDB вкладки (запись на диск — strict:
-// переживает и выключение света): перезапуск хаба или обновление страницы их не теряет — отправка повторяется, после
-// перезагрузки досылается сама (16.10: 3 минуты записи пропали при перезапуске хаба). Видео уходит в хаб всегда — и после
-// обычной остановки, и у оборванной записи (19.10: 0.3–0.5 слали его только при обрыве, в тексте было «Видео не сохранилось»);
-// из браузера стирается после того, как хаб принял сообщение.
+// Video feedback: an icon next to the microphone -> pick a screen -> after 3 s the screen and voice are recorded. On stop,
+// the chat gets the transcript by phrases and screen frames at the moments that were talked about (at most 12 as pictures),
+// all frames - every half second, unconditionally - as an archive, and the screen video itself as a file (in parts up to
+// 18 MB). The voice is recognized by the hub's Voice module (/api/voice) while the recording runs.
+// Until delivery is confirmed, phrases, frames, audio and the screen video sit in the tab's IndexedDB (written to disk with
+// strict durability: survives even a power cut): a hub restart or a page reload does not lose them - sending is retried and,
+// after a reload, finishes by itself (Oct 16: 3 minutes of recording were lost on a hub restart). The video always goes to
+// the hub - after a normal stop and for an interrupted recording alike (Oct 19: 0.3-0.5 sent it only on interruption, and
+// the text said "The video was not saved"); it is erased from the browser after the hub accepted the message.
+// UI texts and the message to the session: en by default, ru when the hub language is Russian (strings.js, picked by
+// hub.lang at use time).
 import { FRAMES, MAX_MS, VOICE, bundles, clock, frameName, message, phrases, pick, sentSummary, zip } from "./lib.js";
+import { tr } from "./strings.js";
 
 const COUNT = 3;
-// кадров по два в секунду, 10 минут — 1200 штук: JPEG сжат так, чтобы текст на экране читался, а архив не раздувался
+// two frames a second, 10 minutes - 1200 of them: JPEG is compressed so that screen text stays readable and the archive does not bloat
 const EDGE = 1280, PIXELS = 0.95e6, QUALITY = 0.6;
 const TICK = 250;
-const VIDEO_PART = 18 * 1024 * 1024;   // часть видео в одной загрузке
-const VIDEO_TRIES = 3;                 // заходов с отказом хаба, после которых сообщение уходит без видео
+const VIDEO_PART = 18 * 1024 * 1024;   // a video part in one upload
+const VIDEO_TRIES = 3;                 // visits with a hub refusal after which the message goes without the video
 
-let R = null;          // идущая запись: {phase: "count" | "rec" | "work", key, ...}
-const buttons = new Map();   // ключ поля → кнопка
+let R = null;          // the running recording: {phase: "count" | "rec" | "work", key, ...}
+const buttons = new Map();   // input field key -> button
 let hubRef = null;
-let pending = [];      // недоставленные записи из IndexedDB (прошлая жизнь вкладки) — дошлёт поле ввода их чата
+let pending = [];      // undelivered recordings from IndexedDB (a past life of the tab) - the input field of their chat sends them
 const resuming = new Set();
+// hubRef.lang is read on every call, never at module load
+const lang = () => hubRef?.lang;
+const t = (key, vars) => tr(lang(), key, vars);
 
-globalThis.__videoFeedback = () => R;   // для проверки в песочнице: идущая запись
+globalThis.__videoFeedback = () => R;   // for checks in a sandbox: the running recording
 
 export default function register(hub) {
-  if (!navigator.mediaDevices?.getDisplayMedia) return;   // телефон: записи экрана нет — и значка нет
+  if (!navigator.mediaDevices?.getDisplayMedia) return;   // a phone: no screen recording, so no icon
   hubRef = hub;
   hub.addStyle("style.css");
-  // запись или отправка — уход со страницы спросит (а обновление на новую версию хаба подождёт метку data-hub-hold)
+  // during a recording or sending, leaving the page asks (and an update to a new hub version waits on the data-hub-hold mark)
   addEventListener("beforeunload", (e) => { if (R && R.phase !== "count") { e.preventDefault(); e.returnValue = ""; } });
   scan();
   hub.addSlot("composer.tools", {
@@ -39,10 +46,10 @@ export default function register(hub) {
         b = hub.el("button", "btn round quiet vf-btn");
         b.type = "button";
         b.addEventListener("click", () => (R ? (R.key === root.__ctx.key ? stop() : null) : start(root.__ctx, snap)));
-        // корзина — пока идёт запись: наговорил не то — удалить, агенту ничего не уходит
+        // the bin is there while recording: said the wrong thing - delete it, nothing goes to the agent
         b.__trash = hub.el("button", "btn round quiet vf-trash");
         b.__trash.type = "button";
-        b.__trash.title = "Удалить запись, не отправлять";
+        b.__trash.title = t("trash");
         b.__trash.setAttribute("aria-label", b.__trash.title);
         b.__trash.append(bin());
         b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
@@ -59,7 +66,7 @@ export default function register(hub) {
 function paint(b, key) {
   const mine = R && R.key === key;
   const phase = mine ? R.phase : R ? "busy" : "idle";
-  const sig = phase + (phase === "count" ? R.left : phase === "rec" ? clock(performance.now() - R.t0) : "");
+  const sig = phase + (phase === "count" ? R.left : phase === "rec" ? clock(performance.now() - R.t0) : "") + (lang() || "");
   if (b.dataset.sig === sig) return;
   b.dataset.sig = sig;
   b.className = "btn round quiet vf-btn vf-" + phase;
@@ -70,11 +77,11 @@ function paint(b, key) {
   else if (phase === "work") b.append(hubRef.el("span", "spin-dot"));
   else b.append(cam());
   const say = {
-    idle: "Записать экран и голос. Запись начнётся через 3 секунды после выбора экрана",
-    busy: "Запись уже идёт в другом чате",
-    count: `Запись через ${R?.left}`,
-    rec: "Остановить и отправить",
-    work: "Расшифровываю и отправляю…",
+    idle: t("say_idle"),
+    busy: t("say_busy"),
+    count: t("say_count", { n: R?.left }),
+    rec: t("say_rec"),
+    work: t("say_work"),
   }[phase];
   b.title = say;
   b.setAttribute("aria-label", say);
@@ -82,7 +89,7 @@ function paint(b, key) {
 }
 
 function paintAll() {
-  // страница хаба не обновляется сама, пока стоит эта метка: запись идёт или ещё не доставлена
+  // the hub page does not reload by itself while this mark stands: a recording is running or not delivered yet
   document.documentElement.toggleAttribute("data-hub-hold", !!R && R.phase !== "count");
   for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key);
 }
@@ -119,7 +126,7 @@ function cam() {
   return s;
 }
 
-// подпись поверх страницы: отсчёт и ошибки (вкладка хаба может быть не на виду — у кнопки то же самое)
+// a caption over the page: the countdown and errors (the hub tab may be out of sight - the same goes for the button)
 function banner(text, ms) {
   let n = document.querySelector(".vf-banner");
   if (!text) return n?.remove();
@@ -135,16 +142,16 @@ async function start(ctx, snap) {
     screen = await navigator.mediaDevices.getDisplayMedia({ video: { displaySurface: "monitor", frameRate: { ideal: 5, max: 10 } },
       audio: false, selfBrowserSurface: "include", surfaceSwitching: "include", monitorTypeSurfaces: "include" });
   } catch (e) {
-    if (e?.name !== "NotAllowedError") banner(`Не удалось включить запись экрана: ${e?.message || e}`, 8000);
-    return;   // отменили выбор экрана — ничего не было
+    if (e?.name !== "NotAllowedError") banner(t("screen_failed", { err: e?.message || e }), 8000);
+    return;   // the screen pick was cancelled: nothing happened
   }
   try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
-  catch { banner("Нет доступа к микрофону, пишу только экран", 5000); }
+  catch { banner(t("no_mic"), 5000); }
   R = { phase: "count", left: COUNT, key: ctx.key, ctx, screen, mic, voice: !!snap?.voice, cancelled: false };
-  screen.getVideoTracks()[0].addEventListener("ended", () => stop());   // «Закрыть доступ» в полосе браузера
+  screen.getVideoTracks()[0].addEventListener("ended", () => stop());   // "Stop sharing" in the browser bar
   const r = R;
   for (; r.left > 0; r.left--) {
-    banner(`Запись через ${r.left}`);
+    banner(t("say_count", { n: r.left }));
     paintAll();
     await sleep(1000);
     if (r.cancelled) return;
@@ -163,8 +170,8 @@ function record() {
   r.wholeN = 0;
   r.videoN = 0;
   r.io = Promise.resolve();
-  r.list = [];          // фразы: {from, speech, to, text}
-  r.frames = [];        // кадры: {t, kind, phrase, blob, n}
+  r.list = [];          // phrases: {from, speech, to, text}
+  r.frames = [];        // frames: {t, kind, phrase, blob, n}
   r.jobs = Promise.resolve();
   r.grab = grabber(r.screen.getVideoTracks()[0]);
   r.ticks = 0;
@@ -178,22 +185,22 @@ function record() {
     r.voiceCut = phrases(VOICE);
     r.voiceCut.begin(0);
     r.piece = piece(r.mic);
-    // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки; кусками по 5 с — в IndexedDB
+    // all the audio as one file: if the phrases have no text it goes to the hub before transcription; in 5 s pieces to IndexedDB
     r.whole = piece(r.mic, (b) => put(r, `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
   }
-  // видео экрана — только в IndexedDB, не в памяти: дойдёт до хаба, если запись оборвётся
+  // the screen video goes only to IndexedDB, not memory: it reaches the hub even if the recording is cut off
   try { r.video = piece(r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
-  catch { r.video = null; }   // браузер не пишет видео — кадры и звук всё равно сохранятся
+  catch { r.video = null; }   // the browser cannot record video - frames and audio are saved anyway
   saveMeta(r);
-  // таймер — в отдельном потоке: вкладка хаба во время записи обычно не на виду, и её таймеры браузер притормаживает
+  // the timer lives in a separate thread: the hub tab is usually out of sight during a recording and the browser throttles its timers
   r.worker = new Worker(hubRef.url("tick.js"));
   r.worker.onmessage = () => tick(r);
   r.worker.postMessage(TICK);
   paintAll();
 }
 
-// кусок голоса: MediaRecorder идёт непрерывно, режется в паузах (VOICE). Видео (VIDEO) — тот же запис, куски которого
-// ещё и сразу уходят в IndexedDB (onChunk); битрейт — чтобы 10 минут экрана были ≈19 МБ
+// a piece of voice: MediaRecorder runs continuously and is cut in pauses (VOICE). Video (VIDEO) is the same recorder, its
+// chunks also go straight to IndexedDB (onChunk); the bitrate is chosen so that 10 minutes of screen are about 19 MB
 const AUDIO = { kinds: ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"], type: "audio/webm" };
 const VIDEO = { kinds: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"], type: "video/webm",
   opts: { videoBitsPerSecond: 250e3 } };
@@ -212,10 +219,10 @@ async function tick(r) {
   const t = performance.now() - r.t0;
   if (t >= MAX_MS) return stop();
   r.ticks++;
-  if (r.ticks % 20 === 0) saveMeta(r);   // длина — на случай, если вкладку обновят посреди записи
+  if (r.ticks % 20 === 0) saveMeta(r);   // the length, in case the tab is reloaded in the middle of a recording
   if (r.ticks % 4 === 0) {
     paintAll();
-    document.title = `● ${clock(t)} · запись`;
+    document.title = tr(lang(), "tab_title", { time: clock(t) });
   }
   if (r.an) {
     r.an.getFloatTimeDomainData(r.buf);
@@ -227,18 +234,18 @@ async function tick(r) {
     if (step.frame) shoot(r, t, "onset");
     if (step.restart) {
       const old = r.piece;
-      r.piece = piece(r.mic);   // следующий кусок пишется сразу — в паузе ничего не теряется
+      r.piece = piece(r.mic);   // the next piece is recorded at once - nothing is lost in the pause
       const blob = old.stop();
       if (step.cut) hear(r, step.cut, blob);
     }
   }
-  if (r.ticks % (FRAMES.every / TICK) === 0 && !r.busyShot) {   // каждые полсекунды — кадр, даже если экран не менялся
+  if (r.ticks % (FRAMES.every / TICK) === 0 && !r.busyShot) {   // a frame every half second, even if the screen did not change
     r.busyShot = true;
     try { await shoot(r, t, "tick"); } finally { r.busyShot = false; }
   }
 }
 
-// фраза закончилась: распознать её сейчас же, пока идёт запись (к остановке почти всё уже готово)
+// a phrase is over: recognize it right now, while the recording runs (by the stop almost everything is ready)
 function hear(r, cut, blob) {
   const p = { ...cut, text: "", blob };
   const i = r.list.push(p) - 1;
@@ -247,27 +254,27 @@ function hear(r, cut, blob) {
   r.jobs = r.jobs.then(() => transcribe(p)).then(() => saveMeta(r));
 }
 
-// фраза → текст; хаб не ответил (перезапуск) — ещё раз при отправке
+// phrase -> text; the hub did not answer (restart): once more at sending
 async function transcribe(p) {
   try {
     const b = await p.blob;
     const res = await hubRef.post("/api/voice", { data: await base64(b), mime: b.type });
     p.text = String(res?.data?.text || "").trim();
-  } catch { /* не разобрал — в сообщении так и будет */ }
+  } catch { /* not recognized - the message will say so */ }
 }
 
 async function shoot(r, t, kind) {
-  const phrase = r.list.length;   // фраза, что идёт сейчас
+  const phrase = r.list.length;   // the phrase going on now
   try {
     const blob = await r.grab();
     if (!blob) return;
     const n = r.frameN++;
     r.frames.push({ t, kind, phrase, blob, n });
-    put(r, `${r.id}/f/${pad(n)}`, blob);   // описание кадров — saveMeta раз в 5 с и при остановке, не 2 раза в секунду
-  } catch { /* без этого кадра */ }
+    put(r, `${r.id}/f/${pad(n)}`, blob);   // the frame list goes with saveMeta once per 5 s and at stop, not twice a second
+  } catch { /* no such frame */ }
 }
 
-// снимок экрана: JPEG с длинной стороной до EDGE
+// a screen shot: JPEG with the long side up to EDGE
 function grabber(track) {
   const cap = "ImageCapture" in window ? new ImageCapture(track) : null;
   let video = null;
@@ -312,7 +319,7 @@ async function stop() {
     await r.jobs;
     r.length = length;
     r.stopped = true;
-    const screen = video ? await video : null;   // видео экрана целиком (куски — и в IndexedDB, на случай обрыва отправки)
+    const screen = video ? await video : null;   // the whole screen video (the chunks are also in IndexedDB, in case sending breaks off)
     await r.io;
     await saveMeta(r);
     await deliver({ ...meta(r), list: r.list, frames: r.frames, whole: whole ? await whole : null,
@@ -323,14 +330,14 @@ async function stop() {
   }
 }
 
-// корзина: остановить и стереть — ни в хаб, ни в браузере ничего не остаётся
+// the bin: stop and erase - nothing is left in the hub or in the browser
 async function discard() {
   const r = R;
   if (!r) return;
-  if (r.phase === "count") return stop();   // отсчёт ещё идёт — то же, что отмена
+  if (r.phase === "count") return stop();   // the countdown is still on: same as cancel
   if (r.phase !== "rec") return;
   r.phase = "gone";
-  r.dead = true;   // запоздалые куски и описание записи в IndexedDB больше не пишутся
+  r.dead = true;   // late chunks and the recording description are no longer written to IndexedDB
   r.worker.terminate();
   document.title = r.title;
   const stops = [r.piece?.stop(), r.whole?.stop(), r.video?.stop()];
@@ -340,17 +347,17 @@ async function discard() {
   await Promise.all(stops);
   await r.io;
   await forget(r.id);
-  banner("Запись удалена, агенту ничего не ушло", 4000);
+  banner(t("discarded"), 4000);
 }
 
-// доставка: кадры, звук (если у фраз нет текста), сообщение. Хаб не ответил (перезапуск) — повтор; из IndexedDB запись
-// уходит только после того, как хаб принял сообщение. Уже загруженное (sent) второй раз не грузится
+// delivery: frames, audio (if the phrases have no text), the message. The hub did not answer (restart): retry; the recording
+// leaves IndexedDB only after the hub accepted the message. What is already uploaded (sent) is not uploaded again
 async function deliver(job, ctx) {
   try {
     if (job.voice) for (const p of job.list) if (!p.text && p.blob) await transcribe(p);
     const lengths = job.list.map((p) => p.to - p.speech);
     const frames = pick(job.frames, lengths);
-    if (!frames.length && !job.list.length) { await forget(job.id); throw new Error("в записи нет ни голоса, ни кадров"); }
+    if (!frames.length && !job.list.length) { await forget(job.id); throw new Error(t("empty_rec")); }
     const sent = (job.sent = job.sent || { metas: [], audio: null, audioDone: false });
     for (const [i, f] of frames.entries()) {
       if (sent.metas[i]) continue;
@@ -359,7 +366,7 @@ async function deliver(job, ctx) {
       sent.metas[i] = { ...up.data, label: `Image #${i + 1}` };
       await saveMeta(job);
     }
-    // кадров больше, чем ушло картинками, — все архивом (zip, части до 18 МБ): сессия распакует, разберёт и удалит
+    // more frames than went as pictures: all of them as an archive (zip, parts up to 18 MB): the session unpacks, reviews and deletes it
     if (job.frames.length > frames.length && !sent.archiveDone) {
       sent.archive = sent.archive || [];
       const seen = new Set();
@@ -375,24 +382,25 @@ async function deliver(job, ctx) {
           sent.archive.push(up.data.path);
           await saveMeta(job);
         }
-      } catch { /* без архива — картинки выше и фразы всё равно уйдут */ }
+      } catch { /* no archive - the pictures above and the phrases go anyway */ }
       sent.archiveDone = true;
       await saveMeta(job);
     }
-    // всё расшифровалось — звук не нужен; запись оборвалась (страницу обновили посреди неё) — конец есть только в звуке
+    // everything was transcribed: no audio needed; the recording was cut off (the page was reloaded in the middle): the end exists only in the audio
     if (job.whole && (!job.stopped || job.list.some((p) => !p.text)) && !sent.audioDone) {
       try {
         const b = job.whole;
         const up = await again(async () => hubRef.post("/api/upload", { name: `voice-${new Date().toTimeString().slice(0, 5).replace(":", "-")}.webm`,
           mime: b.type || "audio/webm", data: await base64(b) }), (x) => x?.data?.path);
         sent.audio = up.data.path;
-      } catch { /* без звука — фразы и кадры всё равно уйдут */ }
+      } catch { /* no audio - the phrases and frames go anyway */ }
       sent.audioDone = true;
       await saveMeta(job);
     }
-    // видео экрана — всегда, частями до 18 МБ (вложение — до 20 МБ); части склеиваются байт в байт. Не загрузилось (хаб лежит
-    // дольше повторов) — запись остаётся в браузере и досылается при следующем заходе; без видео сообщение уходит
-    // только после VIDEO_TRIES неудачных заходов (стойкий отказ хаба не должен держать фидбэк вечно)
+    // the screen video always goes, in parts up to 18 MB (an attachment is up to 20 MB); the parts are joined byte for byte.
+    // Not uploaded (the hub was down longer than the retries): the recording stays in the browser and is sent on the next
+    // visit; the message goes without the video only after VIDEO_TRIES failed visits (a stubborn hub refusal must not hold
+    // the feedback forever)
     if (job.video?.size && !sent.videoDone) {
       sent.video = sent.video || [];
       const n = Math.ceil(job.video.size / VIDEO_PART);
@@ -407,44 +415,44 @@ async function deliver(job, ctx) {
       } catch (e) {
         sent.videoFails = (sent.videoFails || 0) + 1;
         await saveMeta(job);
-        if (sent.videoFails < VIDEO_TRIES) throw new Error(`видео экрана не загрузилось (${e?.message || e})`);
-        sent.video = null;   // отказались: часть без остальных — не видео
+        if (sent.videoFails < VIDEO_TRIES) throw new Error(t("video_failed", { err: e?.message || e }));
+        sent.video = null;   // gave up: a part without the rest is not a video
       }
       sent.videoDone = true;
       await saveMeta(job);
     }
     const text = message({ length: job.length, phrases: job.list, frames, voice: job.voice, audio: sent.audio,
       cut: !job.stopped, video: sent.video || null,
-      archive: sent.archive?.length ? { paths: sent.archive, count: job.frames.length } : null });
+      archive: sent.archive?.length ? { paths: sent.archive, count: job.frames.length } : null, lang: lang() });
     await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
     await forget(job.id);
     pending = pending.filter((x) => x.id !== job.id);
-    banner(sentSummary(job.list.length, sent.archive?.length ? job.frames.length : frames.length), 4000);
+    banner(sentSummary(job.list.length, sent.archive?.length ? job.frames.length : frames.length, lang()), 4000);
     return true;
   } catch (e) {
-    banner(`Не отправилось: ${e?.message || e}. Запись осталась в браузере — отправлю снова, когда откроете этот чат`, 15000);
+    banner(t("not_sent", { err: e?.message || e }), 15000);
     if (!pending.some((x) => x.id === job.id)) pending.push({ ...meta(job), sent: job.sent });
     resuming.delete(job.id);
     return false;
   }
 }
 
-// хаб перезапускается — повторы до ~5 минут; ошибку живого хаба от перезапуска не отличить — тоже повтор
+// the hub is restarting: retries for up to ~5 minutes; an error of a live hub cannot be told from a restart, so it is retried too
 const WAITS = [0, 1, 2, 3, 5, 5, 10, 10, 15, 15, 30, 30, 30, 30, 30, 30, 30];
 async function again(fn, ok) {
   let last = null;
   for (const wait of WAITS) {
-    if (wait) { banner(`Хаб не отвечает — повторю через ${wait} с. Запись сохранена в браузере`); await sleep(wait * 1000); }
+    if (wait) { banner(t("hub_down", { n: wait })); await sleep(wait * 1000); }
     try {
       const res = await fn();
       if (ok(res)) { if (wait) banner(""); return res; }
-      last = res?.error || "хаб не принял";
+      last = res?.error || t("hub_refused");
     } catch (e) { last = e?.message || String(e); }
   }
   throw new Error(last);
 }
 
-// недоставленная запись прошлой жизни вкладки — дослать из поля ввода её чата
+// an undelivered recording of a past life of the tab: send it from the input field of its chat
 async function resume(ctx) {
   const rec = pending.find((x) => x.key === ctx.key && !resuming.has(x.id));
   if (!rec || R) return;
@@ -459,7 +467,7 @@ async function resume(ctx) {
     const whole = parts.length ? new Blob(parts, { type: parts[0].type || "audio/webm" }) : null;
     const vparts = [...blobs].filter(([k]) => k.startsWith(`${rec.id}/v/`)).sort(([a], [b]) => (a < b ? -1 : 1)).map(([, v]) => v);
     const video = vparts.length ? new Blob(vparts, { type: vparts[0].type || "video/webm" }) : null;
-    banner(`Досылаю запись ${clock(rec.length)}, прерванную перезапуском`);
+    banner(t("resuming", { len: clock(rec.length) }));
     await deliver({ ...rec, list, frames, whole, video }, ctx);
   } finally {
     R = null;
@@ -467,24 +475,23 @@ async function resume(ctx) {
   }
 }
 
-// при загрузке страницы: что осталось недоставленным
+// on page load: what was left undelivered
 async function scan() {
   try {
     const recs = await all("rec");
-    const old = recs.filter((x) => Date.now() - x.wall > 7 * 864e5);   // неделю чат не открывали — не копить
+    const old = recs.filter((x) => Date.now() - x.wall > 7 * 864e5);   // the chat was not opened for a week: do not hoard
     for (const x of old) await forget(x.id);
     pending = recs.filter((x) => !old.includes(x)).sort((a, b) => a.wall - b.wall);
-    const live = new Set(pending.map((x) => x.id));   // куски без записи (удалили корзиной, не дописалось) — стереть
+    const live = new Set(pending.map((x) => x.id));   // chunks with no recording (deleted with the bin, not finished): erase
     const orphans = new Set((await tx("blob", "readonly", (st) => st.getAllKeys())).map((k) => String(k).split("/")[0]).filter((id) => !live.has(id)));
     for (const id of orphans) await forget(id);
     if (!pending.length) return;
-    banner(`Есть недоставленный видео-фидбэк (${pending.map((x) => `${clock(x.length)} → ${x.key}`).join(", ")}). `
-      + "Отправлю, когда откроете этот чат", 15000);
+    banner(t("undelivered", { list: pending.map((x) => `${clock(x.length)} → ${x.key}`).join(", ") }), 15000);
     for (const b of buttons.values()) if (b.isConnected && b.parentNode?.__ctx) await resume(b.parentNode.__ctx);
-  } catch { /* IndexedDB нет (частный режим) — запись живёт только в памяти, как раньше */ }
+  } catch { /* no IndexedDB (private mode): the recording lives only in memory, as before */ }
 }
 
-// ───── IndexedDB: rec — описание записи (фразы, кадры, что уже загружено), blob — файлы `id/p|f|w/номер` ─────
+// ───── IndexedDB: rec is the recording description (phrases, frames, what is uploaded already), blob is the files `id/p|f|w|v/number` ─────
 let dbP = null;
 function idb() {
   dbP = dbP || new Promise((ok, bad) => {
@@ -498,7 +505,7 @@ function idb() {
 async function tx(name, mode, fn) {
   const d = await idb();
   return new Promise((ok, bad) => {
-    // запись — strict: на диске, когда транзакция кончилась (иначе браузер может не успеть до выключения света)
+    // a write is strict: on disk when the transaction ends (otherwise the browser may not make it before a power cut)
     const t = mode === "readwrite" ? d.transaction(name, mode, { durability: "strict" }) : d.transaction(name, mode);
     const out = fn(t.objectStore(name));
     t.oncomplete = () => ok(typeof out === "function" ? out() : out?.result);
@@ -515,7 +522,7 @@ const blobsOf = (id) => tx("blob", "readonly", (s) => {
 const forget = (id) => tx("rec", "readwrite", (s) => s.delete(id))
   .then(() => tx("blob", "readwrite", (s) => s.delete(range(id)))).catch(() => {});
 const pad = (n) => String(n).padStart(4, "0");
-// кусок идущей записи — по очереди (корзина ждёт, пока допишется), стёртой — уже не пишется
+// a chunk of the running recording goes in turn (the bin waits until it is written); for an erased one it is not written any more
 const put = (r, key, val) => (r.io = r.io.then(() => (r.dead ? null : keep("blob", key, val))));
 function meta(r) {
   return { id: r.id, key: r.key, wall: r.wall, voice: !!r.voice, stopped: !!r.stopped, sent: r.sent || null,

@@ -3,7 +3,8 @@
 <title>video-feedback harness</title>
 <body>
 <script type="module">
-// Страница-обвязка: поддельный hub (post → сервер теста), экран — холст captureStream, микрофон — осциллятор.
+// Harness page: a fake hub (post -> the test server), the screen is a canvas captureStream, the microphone is an oscillator.
+// hub.lang is undefined (the plugin shows English); a test sets window.__hub.lang to switch the language.
 navigator.mediaDevices.getDisplayMedia = async () => {
   const c = document.createElement("canvas");
   c.width = 640; c.height = 360;
@@ -14,7 +15,7 @@ navigator.mediaDevices.getDisplayMedia = async () => {
     g.fillRect(0, 0, 640, 360);
     g.fillStyle = "#fff";
     g.font = "48px sans-serif";
-    g.fillText(`кадр ${n++}`, 40, 190);
+    g.fillText(`frame ${n++}`, 40, 190);
   };
   draw();
   setInterval(draw, 100);
@@ -41,6 +42,7 @@ const hub = {
   },
   addSlot(place, spec) { window.__slot = spec; },
 };
+window.__hub = hub;
 const { default: register } = await import("/main.js");
 register(hub);
 const root = document.createElement("div");
