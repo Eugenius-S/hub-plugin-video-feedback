@@ -30,7 +30,7 @@ Settings -> Plugins -> paste the link to this repository -> "Check and install".
 
 ## Internals
 
-The voice is recorded in pieces that are cut at pauses: when a phrase ends it goes to recognition at once, in `/api/voice`, while the recording goes on. Every half second the page takes a screen frame - unconditionally, even if the screen did not change (4 minutes of recording is about 480 frames). A frame is a JPEG up to 1280 px on the long side, quality 0.6: text is readable and the archive does not bloat (frames sit in IndexedDB until delivery, 60-150 KB each). 0.4 s after a phrase starts there is one more frame: it goes to the chat first, as a picture. The recording clock runs in a separate thread (`tick.js`): the browser throttles a hub tab that is out of sight.
+The voice is recorded in pieces that are cut at pauses: when a phrase ends it goes to recognition at once, in `/api/voice`, while the recording goes on, two phrases at a time; after the stop the page and the tab title show how many phrases are transcribed ("3 of 60"), so a slow local recognizer does not look like a lost recording. Every half second the page takes a screen frame - unconditionally, even if the screen did not change (4 minutes of recording is about 480 frames). A frame is a JPEG up to 1280 px on the long side, quality 0.6: text is readable and the archive does not bloat (frames sit in IndexedDB until delivery, 60-150 KB each). 0.4 s after a phrase starts there is one more frame: it goes to the chat first, as a picture. The recording clock runs in a separate thread (`tick.js`): the browser throttles a hub tab that is out of sight.
 
 ## Tests
 

@@ -48,7 +48,12 @@ function newHub(opts = {}) {
       let body = {};
       try { body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}"); } catch { /* not JSON */ }
       const reply = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
-      if (url.pathname === "/api/voice") { s.voice++; return reply(200, { text: `phrase ${s.voice}` }); }
+      if (url.pathname === "/api/voice") {
+        const n = ++s.voice;
+        s.busy = (s.busy || 0) + 1;
+        s.maxBusy = Math.max(s.maxBusy || 0, s.busy);
+        return setTimeout(() => { s.busy--; reply(200, { text: `phrase ${n}` }); }, s.voiceDelay || 0);
+      }
       if (url.pathname === "/api/upload") {
         if (s.dieOnVideo && /^screen-video/.test(body.name || "") && s.restarts < s.dieOnVideo) {
           s.restarts++;
@@ -120,8 +125,8 @@ async function launch() {
 const held = (b) => b.ev("document.documentElement.hasAttribute('data-hub-hold')");
 const phase = (b) => b.ev("globalThis.__videoFeedback?.()?.phase || null");
 
-async function load(b, h) {
-  await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/` });
+async function load(b, h, query = "") {
+  await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/${query}` });
   await until(() => b.ev("window.__ready === true").catch(() => false), "the harness page");
 }
 
@@ -221,8 +226,32 @@ async function russian() {
   } finally { b.close(); h.close(); }
 }
 
+// 5. a slow transcription (a local whisper loading its model per phrase): after the stop the page says how many phrases
+// are done, the tab title too, two phrases go at once; then the message arrives and the title comes back
+async function slowVoice() {
+  const h = newHub({ voiceDelay: 7000 });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?pulse");
+    const title = await b.ev("document.title");
+    await record(b, 12);
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    const said = await until(() => b.ev("document.querySelector('.vf-banner')?.textContent || ''")
+      .then((x) => (/^Transcribing phrases: \d+ of \d+/.test(x) ? x : "")), "the transcription progress on the page", 20000);
+    check(true, `the page says it: ${said.slice(0, 40)}`);
+    check(/^◌ \d+\/\d+ · transcribing$/.test(await b.ev("document.title")), "the tab title shows the progress");
+    await until(() => h.sends.length, "the message in the chat", 90000);
+    check(h.voice >= 4, `several phrases (${h.voice})`);
+    check(h.maxBusy === 2, `two phrases transcribed at once, not more (${h.maxBusy})`);
+    check((h.sends[0].text.match(/“phrase \d+”/g) || []).length === h.voice, "every phrase has its text");
+    check((await b.ev("document.title")) === title, "the tab title is back");
+    check(h.sends.length === 1, "one message");
+  } finally { b.close(); h.close(); }
+}
+
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

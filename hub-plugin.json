@@ -3,7 +3,7 @@
   "icon": "icon.png",
   "description": "Give the hub video feedback: press the camera next to the microphone and, 3 seconds later, the screen and your voice start recording. When you stop, the hub turns the speech and key frames into feedback by points, and the video itself lands as a file alongside. It spends more tokens than text, so switch it on when describing in words would take long",
   "why": "Showing on screen and saying it aloud is faster than writing it out",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "hub": "^1.10",
   "web": "main.js",
   "needs": ["voice"],

@@ -25,8 +25,11 @@ navigator.mediaDevices.getUserMedia = async () => {
   const ac = new AudioContext();
   const osc = ac.createOscillator();
   const out = ac.createMediaStreamDestination();
-  osc.connect(out);
+  // ?pulse: speech with pauses (1.5 s tone, 1.5 s silence) - a phrase every 3 s
+  const gain = ac.createGain();
+  osc.connect(gain).connect(out);
   osc.start();
+  if (location.search.includes("pulse")) for (let i = 0; i < 200; i++) gain.gain.setValueAtTime(i % 2 ? 0 : 1, ac.currentTime + i * 1.5);
   return out.stream;
 };
 const hub = {

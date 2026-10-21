@@ -18,6 +18,9 @@ const EDGE = 1280, PIXELS = 0.95e6, QUALITY = 0.6;
 const TICK = 250;
 const VIDEO_PART = 18 * 1024 * 1024;   // a video part in one upload
 const VIDEO_TRIES = 3;                 // visits with a hub refusal after which the message goes without the video
+// phrases transcribed at once. A local whisper may load its model on every call (~20-30 s a phrase): one at a time, a
+// 6-minute recording of 60 phrases waited 10 minutes after the stop with a bare spinner, and the owner took it for lost (Oct 21)
+const VOICE_JOBS = 2;
 
 let R = null;          // the running recording: {phase: "count" | "rec" | "work", key, ...}
 const buttons = new Map();   // input field key -> button
@@ -172,7 +175,8 @@ function record() {
   r.io = Promise.resolve();
   r.list = [];          // phrases: {from, speech, to, text}
   r.frames = [];        // frames: {t, kind, phrase, blob, n}
-  r.jobs = Promise.resolve();
+  r.waiting = [];       // phrases waiting for transcription
+  r.running = 0;
   r.grab = grabber(r.screen.getVideoTracks()[0]);
   r.ticks = 0;
   r.title = document.title;
@@ -251,7 +255,37 @@ function hear(r, cut, blob) {
   const i = r.list.push(p) - 1;
   blob.then((b) => { p.blob = b; return put(r, `${r.id}/p/${pad(i)}`, b); }).then(() => saveMeta(r));
   if (!r.voice) return;
-  r.jobs = r.jobs.then(() => transcribe(p)).then(() => saveMeta(r));
+  r.waiting.push(p);
+  pump(r);
+}
+
+// the transcription queue: up to VOICE_JOBS phrases at once, in the order they were said
+function pump(r) {
+  while (r.running < VOICE_JOBS && r.waiting.length) {
+    const p = r.waiting.shift();
+    r.running++;
+    transcribe(p).then(() => {
+      r.running--;
+      saveMeta(r);
+      progress(r);
+      pump(r);
+      if (!r.running && !r.waiting.length) r.onDrain?.();
+    });
+  }
+}
+const drained = (r) => new Promise((ok) => {
+  const check = () => (!r.running && !r.waiting.length ? ok() : (r.onDrain = check));
+  check();
+});
+
+// after the stop the transcription may take minutes: say how far it is, on the page and in the tab title (the tab is
+// usually out of sight), so a long wait does not look like a lost recording
+function progress(r) {
+  if (R !== r || r.phase !== "work" || !r.voice) return;
+  const all = r.list.length, done = r.list.filter((p) => p.heard).length;
+  if (done >= all) return;
+  banner(t("transcribing", { done, all }));
+  document.title = t("tab_work", { done, all });
 }
 
 // phrase -> text; the hub did not answer (restart): once more at sending
@@ -261,6 +295,7 @@ async function transcribe(p) {
     const res = await hubRef.post("/api/voice", { data: await base64(b), mime: b.type });
     p.text = String(res?.data?.text || "").trim();
   } catch { /* not recognized - the message will say so */ }
+  p.heard = true;
 }
 
 async function shoot(r, t, kind) {
@@ -316,7 +351,9 @@ async function stop() {
   const video = r.video?.stop();
   release(r);
   try {
-    await r.jobs;
+    progress(r);
+    await drained(r);
+    banner(t("sending"));
     r.length = length;
     r.stopped = true;
     const screen = video ? await video : null;   // the whole screen video (the chunks are also in IndexedDB, in case sending breaks off)
@@ -325,6 +362,7 @@ async function stop() {
     await deliver({ ...meta(r), list: r.list, frames: r.frames, whole: whole ? await whole : null,
       video: screen?.size ? screen : null }, r.ctx);
   } finally {
+    document.title = r.title;
     R = null;
     paintAll();
   }
@@ -354,7 +392,14 @@ async function discard() {
 // leaves IndexedDB only after the hub accepted the message. What is already uploaded (sent) is not uploaded again
 async function deliver(job, ctx) {
   try {
-    if (job.voice) for (const p of job.list) if (!p.text && p.blob) await transcribe(p);
+    if (job.voice) {
+      const left = job.list.filter((p) => !p.text && p.blob);
+      for (const [i, p] of left.entries()) {
+        banner(t("transcribing", { done: i, all: left.length }));
+        await transcribe(p);
+      }
+      if (left.length) banner(t("sending"));
+    }
     const lengths = job.list.map((p) => p.to - p.speech);
     const frames = pick(job.frames, lengths);
     if (!frames.length && !job.list.length) { await forget(job.id); throw new Error(t("empty_rec")); }
