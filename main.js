@@ -39,7 +39,7 @@ export default function register(hub) {
         b = hub.el("button", "btn round quiet vf-btn");
         b.type = "button";
         b.addEventListener("click", () => (R ? (R.key === root.__ctx.key ? stop() : null) : start(root.__ctx, snap)));
-        // корзина — пока идёт запись: наговорил не то — удалить, агенту ничего не уходит (владелец 16.10)
+        // корзина — пока идёт запись: наговорил не то — удалить, агенту ничего не уходит
         b.__trash = hub.el("button", "btn round quiet vf-trash");
         b.__trash.type = "button";
         b.__trash.title = "Удалить запись, не отправлять";
@@ -178,10 +178,10 @@ function record() {
     r.voiceCut = phrases(VOICE);
     r.voiceCut.begin(0);
     r.piece = piece(r.mic);
-    // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки (владелец 15.10); кусками по 5 с — в IndexedDB
+    // весь звук одним файлом: у фраз нет текста — в хаб, до расшифровки; кусками по 5 с — в IndexedDB
     r.whole = piece(r.mic, (b) => put(r, `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
   }
-  // видео экрана — только в IndexedDB, не в памяти: дойдёт до хаба, если запись оборвётся (владелец 16.10)
+  // видео экрана — только в IndexedDB, не в памяти: дойдёт до хаба, если запись оборвётся
   try { r.video = piece(r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
   catch { r.video = null; }   // браузер не пишет видео — кадры и звук всё равно сохранятся
   saveMeta(r);

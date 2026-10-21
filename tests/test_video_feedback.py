@@ -26,7 +26,7 @@ class Manifest(unittest.TestCase):
 
 class Source(unittest.TestCase):
     def test_video_is_kept_only_until_delivery(self):
-        # владелец 15.10: видео не копит диск; 16.10: «данные бесценны… и видео обязательно» — видео и всё остальное
+        # видео не копит диск: видео и всё остальное
         # лежат в IndexedDB вкладки (strict — переживает выключение света) до подтверждения доставки, потом стираются
         js = read("main.js")
         self.assertEqual(js.count("new MediaRecorder("), 1)            # один запис на голос и экран
@@ -43,7 +43,7 @@ class Source(unittest.TestCase):
         self.assertNotIn("fresh(", js)                                 # кадр каждые 500 мс безусловно, без сравнения экранов
 
     def test_video_is_always_sent(self):
-        # 19.10 (d68760): 0.3–0.5 слали видео только оборванной записи — после обычной остановки в тексте было «Видео не сохранилось»
+        # 19.10: 0.3–0.5 слали видео только оборванной записи — после обычной остановки в тексте было «Видео не сохранилось»
         js = read("main.js")
         self.assertNotIn("!job.stopped && job.video", js)
         self.assertIn("if (job.video?.size && !sent.videoDone)", js)    # видео уходит и у остановленной записи
