@@ -43,6 +43,16 @@ class Source(unittest.TestCase):
         self.assertIn('new Worker(hubRef.url("tick.js"))', js)         # часы — не таймер вкладки (её притормаживают)
         self.assertNotIn("fresh(", js)                                 # кадр каждые 500 мс безусловно, без сравнения экранов
 
+    def test_hint_is_not_a_native_tooltip(self):
+        # 28.10 (d144553): подсказка кнопки — родной tooltip браузера (title) — после выбора экрана зависала посреди списка
+        # сессий на всю запись: окно выбора забирает мышь, и браузер не получает «ушла». Своя подсказка (data-tip, только
+        # :hover) гаснет при первом движении мыши по странице
+        js = read("main.js")
+        self.assertNotIn("b.title =", js)
+        self.assertNotIn("__trash.title =", js)
+        self.assertIn("dataset.tip", js)
+        self.assertIn("[data-tip]:hover::after", read("style.css"))
+
     def test_empty_recording_is_not_a_failed_delivery(self):
         # запись без голоса и кадров стирается и не должна ни показывать «Не отправилось», ни попадать в недоставленные
         js = read("main.js")

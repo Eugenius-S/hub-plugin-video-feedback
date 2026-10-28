@@ -45,8 +45,8 @@ export default function register(hub) {
         // корзина — пока идёт запись: наговорил не то — удалить, агенту ничего не уходит (владелец 16.10)
         b.__trash = hub.el("button", "btn round quiet vf-trash");
         b.__trash.type = "button";
-        b.__trash.title = "Удалить запись, не отправлять";
-        b.__trash.setAttribute("aria-label", b.__trash.title);
+        b.__trash.dataset.tip = "Удалить запись, не отправлять";   // не title: родная подсказка зависает (style.css)
+        b.__trash.setAttribute("aria-label", b.__trash.dataset.tip);
         b.__trash.append(bin());
         b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
         root.append(b.__trash, b);
@@ -87,7 +87,7 @@ function paint(b, key) {
     rec: "Остановить и отправить",
     work: "Расшифровываю и отправляю…",
   }[phase];
-  b.title = say;
+  b.dataset.tip = say;
   b.setAttribute("aria-label", say);
   if (b.__trash) b.__trash.hidden = !(mine && (phase === "rec" || phase === "count"));
 }

@@ -17,3 +17,10 @@
   max-width: min(560px, 90vw); text-align: center; }
 .vf-trash .icon { width: 20px; height: 20px; }
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
+/* своя подсказка вместо title: родная зависает посреди страницы, когда окно выбора экрана забирает мышь на всю запись; эта
+   живёт, пока на кнопке :hover, и гаснет при первом движении мыши по странице */
+.vf-btn, .vf-trash { position: relative; }
+.vf-slot [data-tip]:hover::after { content: attr(data-tip); position: absolute; right: 0; bottom: calc(100% + 6px); z-index: var(--z-toast, 1000);
+  width: max-content; max-width: 260px; padding: 6px 10px; border-radius: var(--radius-md, 8px); background: var(--popover, var(--card));
+  color: var(--foreground); border: 1px solid var(--border); box-shadow: 0 4px 12px rgb(0 0 0 / .14); text-align: left;
+  font: 400 var(--text-sm, 14px)/1.3 var(--font-ui, inherit); white-space: normal; pointer-events: none; }
