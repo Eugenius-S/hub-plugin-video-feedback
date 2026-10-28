@@ -135,7 +135,7 @@ class Languages(unittest.TestCase):
     def test_russian_hub_gets_the_russian_texts(self):
         self.assertEqual(node_eval("ru", 'tr(L, "say_rec")'), "Остановить и отправить")
         self.assertEqual(node_eval("ru", 'tr(L, "not_sent", { err: "x" })'),
-                         "Не отправилось: x. Запись осталась в браузере — отправлю снова, когда откроете этот чат")
+                         "Не отправилось: x. Запись осталась в браузере, отправлю снова, когда откроете этот чат")
         self.assertEqual(node_eval("ru", "sentSummary(5, 3, L)"), "Отправлено: 5 фраз, 3 кадра")
         self.assertTrue(node_eval("ru", "message({ length: 5000, voice: true, frames: [], phrases: [], lang: L })")
                         .startswith("Видео-фидбэк, 0:05. Видео не сохранилось, ниже мои слова"))
