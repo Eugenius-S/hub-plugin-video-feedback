@@ -16,7 +16,7 @@
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
 
 /* ───── pen island over the screen (the look is the designer's mockup): the theme comes from the hub tokens ───── */
-.vfd-root { position: fixed; top: 16px; left: 0; z-index: 2147483000; width: max-content; font-family: var(--font-ui, inherit); }
+.vfd-root { position: fixed; top: 0; left: 0; z-index: 2147483000; width: max-content; will-change: transform; font-family: var(--font-ui, inherit); }   /* the place is a transform, set by island.js */
 .vfd-root, .vfd-root *, .vfd-root ::before, .vfd-root ::after { box-sizing: border-box; }
 .vfd-root[hidden], .vfd-root [hidden] { display: none !important; }
 .vf-draw { position: fixed; inset: 0; z-index: 2147482990; pointer-events: none; mix-blend-mode: difference; }   /* white ink: an inverse of what lies under it */
@@ -75,7 +75,7 @@
 }
 
 /* Motion Gallery popover: centred under the island, 8 below it */
-.vfd-pop, .vfd-toast { position: absolute; animation: vfd-in var(--dur-fast) var(--ease-out) both; }
+.vfd-pop, .vfd-toast { position: absolute; left: 0; animation: vfd-in var(--dur-fast) var(--ease-out) both; }
 @keyframes vfd-in { from { opacity: 0; scale: 0.97; } }
 @keyframes vfd-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {

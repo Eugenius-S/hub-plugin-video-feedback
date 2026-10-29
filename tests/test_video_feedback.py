@@ -95,7 +95,7 @@ class Source(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "needs node")
     def test_scripts_parse_and_logic_holds(self):
-        for name in ("main.js", "lib.js", "island.js", "tick.js", "strings.js"):
+        for name in ("main.js", "lib.js", "island.js", "tick.js", "frame.js", "strings.js"):
             r = subprocess.run(["node", "--check", os.path.join(ROOT, name)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         r = subprocess.run(["node", "--test", os.path.join(ROOT, "tests", "lib.test.mjs")], capture_output=True, text=True)
@@ -123,7 +123,7 @@ class Languages(unittest.TestCase):
     """UI strings and the message to the session: en by default, ru for a Russian hub; picked at use time by hub.lang."""
 
     def test_russian_text_only_in_the_ru_table(self):
-        for name in ("main.js", "lib.js", "island.js", "tick.js", "style.css", "README.md", "tests/e2e/harness.html"):
+        for name in ("main.js", "lib.js", "island.js", "tick.js", "frame.js", "style.css", "README.md", "tests/e2e/harness.html"):
             self.assertFalse(CYR.search(read(name)), name)
         js = read("strings.js")
         head, ru = js.split("\n  ru: {", 1)                           # everything before the ru table is English

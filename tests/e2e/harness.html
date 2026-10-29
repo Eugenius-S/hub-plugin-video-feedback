@@ -25,19 +25,20 @@ document.documentElement.classList.add(Q.get("theme") === "dark" ? "t-dark" : "t
 // ?bg=light|dark|split: a still "screen" (white, black, or white on the left and black on the right) - the ink colour test
 navigator.mediaDevices.getDisplayMedia = async () => {
   const c = document.createElement("canvas");
-  c.width = 640; c.height = 360;
+  const [SW, SH] = (Q.get("screen") || "640x360").split("x").map(Number);   // ?screen=2560x1440: a screen as big as a real one
+  c.width = SW; c.height = SH;
   const g = c.getContext("2d");
   let n = 0;
   const bg = Q.get("bg");
   const draw = () => {
     if (bg) {
       g.fillStyle = bg === "dark" ? "#000" : "#fff";
-      g.fillRect(0, 0, 640, 360);
-      if (bg === "split") { g.fillStyle = "#000"; g.fillRect(320, 0, 320, 360); }
+      g.fillRect(0, 0, SW, SH);
+      if (bg === "split") { g.fillStyle = "#000"; g.fillRect(SW / 2, 0, SW / 2, SH); }
       return;
     }
     g.fillStyle = `hsl(${(n * 9) % 360} 60% 45%)`;
-    g.fillRect(0, 0, 640, 360);
+    g.fillRect(0, 0, SW, SH);
     g.fillStyle = "#fff";
     g.font = "48px sans-serif";
     g.fillText(`frame ${n++}`, 40, 190);

@@ -40,7 +40,8 @@ export function icon(name, small) {
 export function createIsland(o) {
   const hold = o.hold ?? DRAW.hold;
   const toastMs = o.toastMs ?? 3000;
-  let tool = null, strokes = [], cur = null, raf = 0, gal = null, opened = false;
+  let tool = null, strokes = [], cur = null, gal = null, opened = false;
+  let dirty = null, frameId = 0, wake = 0, pos = { x: 0, y: 0 };   // the area to repaint, the pending frame and fade timer, the island's place
   let pop = null, find = null, grid = null, clockTimer = 0, toast = null, toastTimer = 0, retry = 0, tip = null;
 
   const root = o.el("div", "vfd-root");
@@ -104,7 +105,9 @@ export function createIsland(o) {
     canvas.width = Math.round(innerWidth * dpr);
     canvas.height = Math.round(innerHeight * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    draw();
+    dirty = { x1: 0, y1: 0, x2: innerWidth, y2: innerHeight };
+    cancelAnimationFrame(frameId);
+    frame();
   }
 
   function pick(id) {
@@ -114,29 +117,49 @@ export function createIsland(o) {
     if (id) closePop();
   }
 
-  const at = (e) => ({ x: e.clientX, y: e.clientY });
+  // Drawing stays off the pointer handlers: they only record points (no layout reads, no painting); one animation frame paints
+  // what changed, and only inside the rectangle that changed (`dirty`). A pencil stroke being drawn adds only its new segments.
+  const pad = DRAW.width / 2 + 2;
+  const bounds = (s) => s.tool === "pencil" ? s.box
+    : { x1: Math.min(s.a.x, s.b.x), y1: Math.min(s.a.y, s.b.y), x2: Math.max(s.a.x, s.b.x), y2: Math.max(s.a.y, s.b.y) };
+  const mark = (r) => {
+    dirty = dirty ? { x1: Math.min(dirty.x1, r.x1 - pad), y1: Math.min(dirty.y1, r.y1 - pad), x2: Math.max(dirty.x2, r.x2 + pad), y2: Math.max(dirty.y2, r.y2 + pad) }
+      : { x1: r.x1 - pad, y1: r.y1 - pad, x2: r.x2 + pad, y2: r.y2 + pad };
+  };
+  const schedule = () => { if (!frameId) frameId = requestAnimationFrame(frame); };
+
   canvas.addEventListener("pointerdown", (e) => {
     if (!tool || e.button) return;
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
-    const p = at(e);
-    cur = { tool, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], done: 0 };
+    const p = { x: e.clientX, y: e.clientY };
+    cur = { tool, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, drawn: 0, done: 0 };
     strokes.push(cur);
-    draw();
+    schedule();
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!cur) return;
-    const p = at(e);
-    if (cur.tool === "pencil") cur.segs.push({ x1: cur.b.x, y1: cur.b.y, x2: p.x, y2: p.y });
-    cur.b = p;
-    draw();
+    const s = cur;
+    if (s.tool !== "pencil") mark(bounds(s));   // the old place of the shape is wiped, the new one painted
+    const points = e.getCoalescedEvents?.() ?? [];
+    for (const m of points.length ? points : [e]) {
+      const p = { x: m.clientX, y: m.clientY };
+      if (s.tool === "pencil") {
+        s.segs.push({ x1: s.b.x, y1: s.b.y, x2: p.x, y2: p.y });
+        s.box = { x1: Math.min(s.box.x1, p.x), y1: Math.min(s.box.y1, p.y), x2: Math.max(s.box.x2, p.x), y2: Math.max(s.box.y2, p.y) };
+      }
+      s.b = p;
+    }
+    if (s.tool !== "pencil") mark(bounds(s));
+    schedule();
   });
   const up = () => {
     if (!cur) return;
+    if (cur.drawn < cur.segs.length) mark(bounds(cur));   // the tail not yet painted is painted with the fade alpha on the next frame
     cur.done = performance.now();
     cur = null;
     o.onStroke?.();
-    draw();
+    schedule();
   };
   canvas.addEventListener("pointerup", up);
   canvas.addEventListener("pointercancel", up);
@@ -161,26 +184,69 @@ export function createIsland(o) {
     g.stroke();
   }
 
-  // a finished stroke stays `hold` ms and fades out; a stroke being drawn is always whole
-  function draw() {
-    cancelAnimationFrame(raf);
-    g.clearRect(0, 0, innerWidth, innerHeight);
+  // a finished stroke stays `hold` ms and fades out; a stroke being drawn is always whole. Nothing runs while strokes only wait:
+  // a timer wakes the frame when the first one starts to fade, and the frames run only during the fade itself.
+  function frame() {
+    frameId = 0;
+    clearTimeout(wake);
     const now = performance.now();
-    strokes = strokes.filter((s) => !s.done || !hold || now - s.done < hold + DRAW.fade);
-    for (const s of strokes) paint(s, s.done ? fadeAlpha(now - s.done, hold) : 1);
+    let fading = false, next = Infinity;
+    strokes = strokes.filter((s) => {
+      if (!s.done || !hold) return true;
+      const age = now - s.done;
+      if (age >= hold + DRAW.fade) { mark(bounds(s)); return false; }
+      if (age >= hold) { mark(bounds(s)); fading = true; } else next = Math.min(next, hold - age);
+      return true;
+    });
     g.globalAlpha = 1;
-    if (strokes.length && (cur || hold)) raf = requestAnimationFrame(draw);   // animate while a stroke is live or can still fade
+    for (const s of strokes) {
+      if (s.tool !== "pencil" || s.done || s.drawn >= s.segs.length) continue;
+      g.lineWidth = DRAW.width;
+      g.lineCap = g.lineJoin = "round";
+      g.strokeStyle = DRAW.ink;
+      g.beginPath();
+      g.moveTo(s.segs[s.drawn].x1, s.segs[s.drawn].y1);
+      for (let i = s.drawn; i < s.segs.length; i++) g.lineTo(s.segs[i].x2, s.segs[i].y2);
+      g.stroke();
+      s.drawn = s.segs.length;
+    }
+    if (dirty) {
+      const x = Math.floor(dirty.x1) - 1, y = Math.floor(dirty.y1) - 1, w = Math.ceil(dirty.x2) + 1 - x, h = Math.ceil(dirty.y2) + 1 - y;
+      dirty = null;
+      g.save();
+      g.beginPath();
+      g.rect(x, y, w, h);
+      g.clip();
+      g.clearRect(x, y, w, h);
+      for (const s of strokes) {
+        const b = bounds(s);
+        if (b.x2 + pad < x || b.x1 - pad > x + w || b.y2 + pad < y || b.y1 - pad > y + h) continue;
+        paint(s, s.done ? fadeAlpha(now - s.done, hold) : 1);
+        if (s.tool === "pencil") s.drawn = s.segs.length;
+      }
+      g.restore();
+    }
+    if (fading) schedule();
+    else if (next < Infinity) wake = setTimeout(schedule, next + 1);
   }
 
-  // dragging the island by the grip, anywhere on the page; the place is remembered
-  const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, innerWidth - root.offsetWidth - 4)),
-    y: Math.min(Math.max(4, y), Math.max(4, innerHeight - root.offsetHeight - 4)) });
-  const place = (x, y) => { const p = keepIn(x, y); root.style.left = p.x + "px"; root.style.top = p.y + "px"; return p; };
+  // dragging the island by the grip, anywhere on the page; the place is remembered. The island moves by transform (the compositor,
+  // not layout): the pointer handler only keeps the last point, one animation frame moves it, and the sizes are measured once
+  const size = { w: 0, h: 0 };
+  const measure = () => { size.w = root.offsetWidth; size.h = root.offsetHeight; };
+  const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, innerWidth - size.w - 4)),
+    y: Math.min(Math.max(4, y), Math.max(4, innerHeight - size.h - 4)) });
+  const place = (x, y) => {
+    const p = keepIn(x, y);
+    if (p.x !== pos.x || p.y !== pos.y || !root.style.transform) { pos = p; root.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`; }
+    return p;
+  };
   const home = () => {
+    measure();
     let s = null;
     try { s = JSON.parse(localStorage.getItem(POS)); } catch { /* none */ }
     if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) return place(s.x * innerWidth, s.y * innerHeight);
-    return place((innerWidth - root.offsetWidth) / 2, 16);   // top centre, 16 from the edge
+    return place((innerWidth - size.w) / 2, 16);   // top centre, 16 from the edge
   };
   grip.addEventListener("pointerdown", (e) => {
     if (e.button) return;
@@ -188,30 +254,50 @@ export function createIsland(o) {
     tipOff();
     grip.setPointerCapture(e.pointerId);
     bar.classList.add("is-dragging");
-    const dx = e.clientX - root.offsetLeft, dy = e.clientY - root.offsetTop;
-    const move = (m) => { place(m.clientX - dx, m.clientY - dy); if (pop) under(pop); if (toast) under(toast); };
+    measure();
+    if (pop) measureLayer(pop);
+    if (toast) measureLayer(toast);
+    const dx = e.clientX - pos.x, dy = e.clientY - pos.y;
+    let last = null, step = 0;
+    const apply = () => {
+      step = 0;
+      if (!last) return;
+      place(last.clientX - dx, last.clientY - dy);
+      last = null;
+      if (pop) under(pop);
+      if (toast) under(toast);
+    };
+    const move = (m) => { last = m; if (!step) step = requestAnimationFrame(apply); };
     const end = () => {
       grip.removeEventListener("pointermove", move);
       grip.removeEventListener("pointerup", end);
       grip.removeEventListener("pointercancel", end);
+      cancelAnimationFrame(step);
+      apply();
       bar.classList.remove("is-dragging");
-      try { localStorage.setItem(POS, JSON.stringify({ x: root.offsetLeft / innerWidth, y: root.offsetTop / innerHeight })); } catch { /* no storage */ }
+      try { localStorage.setItem(POS, JSON.stringify({ x: pos.x / innerWidth, y: pos.y / innerHeight })); } catch { /* no storage */ }
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", end);
     grip.addEventListener("pointercancel", end);
   });
 
-  // a layer (popover, toast) centred under the island, 8 below it; kept on the screen, flips above at the bottom edge
-  function under(el) {
-    const r = bar.getBoundingClientRect();
-    const w = el.offsetWidth, h = el.offsetHeight;
-    const up = innerHeight - r.bottom - EDGE < h + EDGE && r.top > innerHeight - r.bottom;
-    const left = Math.min(Math.max(EDGE, r.left + r.width / 2 - w / 2), Math.max(EDGE, innerWidth - w - EDGE));
-    el.style.left = left - root.offsetLeft + "px";
-    el.style.top = up ? "" : `calc(100% + ${EDGE}px)`;
-    el.style.bottom = up ? `calc(100% + ${EDGE}px)` : "";
-    el.style.transformOrigin = up ? "50% 100%" : "50% 0";
+  // a layer (popover, toast) centred under the island, 8 below it; kept on the screen, flips above at the bottom edge.
+  // Works from the known place and the measured sizes (no layout reads while dragging), moves by `translate`, writes only a change
+  const measureLayer = (el) => { el.vfW = el.offsetWidth; el.vfH = el.offsetHeight; };
+  function under(el, fresh) {
+    if (fresh || el.vfW === undefined) measureLayer(el);
+    const w = el.vfW, h = el.vfH;
+    const up = innerHeight - (pos.y + size.h) - EDGE < h + EDGE && pos.y > innerHeight - (pos.y + size.h);
+    const left = Math.min(Math.max(EDGE, pos.x + size.w / 2 - w / 2), Math.max(EDGE, innerWidth - w - EDGE));
+    const shift = `${left - pos.x}px 0`;
+    if (el.vfShift !== shift) { el.vfShift = shift; el.style.translate = shift; }
+    if (el.vfUp !== up) {
+      el.vfUp = up;
+      el.style.top = up ? "" : `calc(100% + ${EDGE}px)`;
+      el.style.bottom = up ? `calc(100% + ${EDGE}px)` : "";
+      el.style.transformOrigin = up ? "50% 100%" : "50% 0";
+    }
   }
 
   // Motion Gallery: a search over the titles, a pick tags the animation at this moment
@@ -323,7 +409,7 @@ export function createIsland(o) {
     if (e.key !== "Escape" || !opened) return;
     if (pop) { closePop(); mg.focus({ preventScroll: true }); } else if (tool) pick(null);
   };
-  const resize = () => { fit(); if (opened) { home(); if (pop) under(pop); if (toast) under(toast); } };
+  const resize = () => { fit(); if (opened) { home(); if (pop) under(pop, true); if (toast) under(toast, true); } };
 
   function open() {
     if (opened) return;
@@ -347,7 +433,10 @@ export function createIsland(o) {
     dismissToast();
     tipOff();
     clearTimeout(retry);
-    cancelAnimationFrame(raf);
+    cancelAnimationFrame(frameId);
+    clearTimeout(wake);
+    frameId = 0;
+    dirty = null;
     root.remove();
     canvas.remove();
     removeEventListener("resize", resize);

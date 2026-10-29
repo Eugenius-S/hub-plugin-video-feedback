@@ -300,7 +300,8 @@ async function drag(b, a, c) {
 }
 const tool = (b, id) => b.ev(`document.querySelector('.vfd-btn[data-tool="${id}"]').click()`);
 const rec = (b) => b.ev("globalThis.__videoFeedback?.()");
-const pixel = (b, x, y) => b.ev(`(() => { const d = document.querySelector('.vf-draw').getContext('2d').getImageData(${x}, ${y}, 1, 1).data; return [d[0], d[1], d[2], d[3]]; })()`);
+const pixel = async (b, x, y) => { await sleep(150); return pixelNow(b, x, y); };   // the ink is painted by the next animation frame
+const pixelNow = (b, x, y) => b.ev(`(() => { const d = document.querySelector('.vf-draw').getContext('2d').getImageData(${x}, ${y}, 1, 1).data; return [d[0], d[1], d[2], d[3]]; })()`);
 async function view(b, w = 1000, h = 700) { await b.page("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false }); }
 async function island(b, seconds = 1) {
   await record(b, 0);
@@ -453,7 +454,7 @@ async function place() {
     await load(b, h, "?bg=light");
     await view(b);
     await island(b, 0.3);
-    const at = "(() => { const r = document.querySelector('.vfd-root'); return [r.offsetLeft, r.offsetTop]; })()";
+    const at = "(() => { const r = document.querySelector('.vfd-root').getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top)]; })()";
     const grip = "(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()";
     const dots = await b.ev("document.querySelectorAll('.vfd-grip svg path').length === 1 && /^M11 18c/.test(document.querySelector('.vfd-grip svg path').getAttribute('d'))");
     check(dots, "the grip is the six dots icon");
@@ -495,10 +496,11 @@ async function theme() {
       await island(b, 0.3);
       bgs[th] = await b.ev("getComputedStyle(document.querySelector('.vfd-island')).backgroundColor");
       if (th === "dark") {
-        const before = await b.ev("document.querySelector('.vfd-root').offsetLeft");
+        const where = "(() => { const r = document.querySelector('.vfd-root').getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top)]; })()";
+        const before = (await b.ev(where))[0];
         await drag(b, [await b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return r.x + r.width / 2; })()"),
           await b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return r.y + r.height / 2; })()")], [300, 400]);
-        const after = await b.ev("[document.querySelector('.vfd-root').offsetLeft, document.querySelector('.vfd-root').offsetTop]");
+        const after = await b.ev(where);
         check(after[0] !== before && after[1] > 100, `the grip drags the island (${before} → ${after})`);
         check(await b.ev("!!localStorage.getItem('hub-video-feedback:island')"), "the place is remembered");
       }
@@ -582,11 +584,119 @@ async function confine() {
   }
 }
 
+// 15. smoothness while recording: how many frames of the page are longer than a frame, per kind of action (a measurement with
+// numbers; the limits are loose, headless Chrome paints in software). VF_PERF_DSF sets the pixel ratio, VF_PERF_THROTTLE slows the CPU down N times, VF_PERF_SCREEN the recorded screen, VF_PERF_JSON a file for the numbers
+async function smooth() {
+  const h = newHub({ gallery: true });
+  await h.listen();
+  const b = await launch();
+  const dsf = Number(process.env.VF_PERF_DSF) || 1;
+  const out = {};
+  try {
+    await load(b, h, `?bg=light&pulse&screen=${process.env.VF_PERF_SCREEN || "2560x1440"}`);
+    await b.page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: dsf, mobile: false });
+    if (process.env.VF_PERF_THROTTLE) await b.page("Emulation.setCPUThrottlingRate", { rate: Number(process.env.VF_PERF_THROTTLE) });
+    await island(b, 1);
+    await b.page("Performance.enable");
+    await b.ev(`(() => {
+      const P = (window.__perf = { on: false, t: [], long: [], ev: [] });
+      const loop = (t) => { if (P.on) P.t.push(t); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+      new PerformanceObserver((l) => { for (const e of l.getEntries()) if (P.on) P.long.push(e.duration); }).observe({ type: "longtask" });
+      new PerformanceObserver((l) => { for (const e of l.getEntries()) if (P.on) P.ev.push(e.duration); }).observe({ type: "event", durationThreshold: 16 });
+    })()`);
+    const metric = async () => Object.fromEntries((await b.page("Performance.getMetrics")).metrics.map((m) => [m.name, m.value]));
+    const measure = async (name, fn) => {
+      await b.ev("(() => { __perf.t = []; __perf.long = []; __perf.ev = []; __perf.on = true; })()");
+      const m0 = await metric(), t0 = Date.now();
+      await fn();
+      await sleep(100);
+      const m1 = await metric(), wall = (Date.now() - t0) / 1000;
+      const r = await b.ev("(() => { __perf.on = false; return { t: __perf.t, long: __perf.long, ev: __perf.ev }; })()");
+      const d = r.t.slice(1).map((x, i) => x - r.t[i]).sort((a, c) => a - c);
+      const q = (p) => d.length ? +d[Math.min(d.length - 1, Math.floor(d.length * p))].toFixed(1) : 0;
+      out[name] = { frames: d.length, over20: +(100 * d.filter((x) => x > 20).length / Math.max(1, d.length)).toFixed(1), over34: d.filter((x) => x > 34).length,
+        p95: q(0.95), max: d.length ? +d[d.length - 1].toFixed(1) : 0, fps: +(d.length / wall).toFixed(1), long: r.long.length, longMax: Math.round(Math.max(0, ...r.long)),
+        slowEvents: r.ev.length, busy: +(100 * ((m1.TaskDuration - m0.TaskDuration) / wall)).toFixed(1), script: +(100 * ((m1.ScriptDuration - m0.ScriptDuration) / wall)).toFixed(1),
+        layout: +(100 * ((m1.LayoutDuration - m0.LayoutDuration) / wall)).toFixed(1), style: +(100 * ((m1.RecalcStyleDuration - m0.RecalcStyleDuration) / wall)).toFixed(1) };
+      console.log(name.padEnd(10), JSON.stringify(out[name]));
+    };
+    // a hand moves the mouse about every 8 ms; the path is paced by the clock, not by the round trip
+    const path = async (pts, ms) => {
+      const t0 = Date.now();
+      for (let i = 0; i < pts.length; i++) {
+        await mouse(b, "mouseMoved", pts[i][0], pts[i][1]);
+        const wait = t0 + ((i + 1) * ms) / pts.length - Date.now();
+        if (wait > 0) await sleep(wait);
+      }
+    };
+    const scribble = (cx, cy, n) => Array.from({ length: n }, (_, i) => [cx + 300 * Math.cos(i / 25) * (1 - i / (2 * n)), cy + 200 * Math.sin(i / 17)]);
+    const grip = "(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()";
+    await measure("idle", () => sleep(2000));
+    await measure("pencil", async () => {
+      await tool(b, "pencil");
+      for (let k = 0; k < 3; k++) {
+        const pts = scribble(640, 400 + k * 30, 250);
+        await mouse(b, "mouseMoved", pts[0][0], pts[0][1]);
+        await mouse(b, "mousePressed", pts[0][0], pts[0][1]);
+        await path(pts, 2000);
+        await mouse(b, "mouseReleased", pts[pts.length - 1][0], pts[pts.length - 1][1]);
+      }
+    });
+    await measure("shapes", async () => {
+      for (const id of ["rect", "oval", "line"]) {
+        await tool(b, id);
+        await mouse(b, "mouseMoved", 200, 200);
+        await mouse(b, "mousePressed", 200, 200);
+        await path(Array.from({ length: 120 }, (_, i) => [200 + i * 5, 200 + i * 3]), 1000);
+        await mouse(b, "mouseReleased", 800, 560);
+      }
+    });
+    await measure("fade", () => sleep(7500));
+    await tool(b, "line");   // let go of the tool
+    await measure("dragbar", async () => {
+      const [gx, gy] = await b.ev(grip);
+      await mouse(b, "mouseMoved", gx, gy);
+      await mouse(b, "mousePressed", gx, gy);
+      await path(Array.from({ length: 250 }, (_, i) => [gx + i * 2, gy + 250 * Math.sin(i / 40) * (i / 250)]), 2000);
+      await mouse(b, "mouseReleased", gx + 500, gy);
+    });
+    let openMs = 0;   // the script time of opening the popover (the click handler up to the forced layout)
+    await measure("popover", async () => {
+      await until(() => b.ev("!document.querySelector('.vfd-btn[data-act=mg]').hidden"), "the Motion Gallery icon", 20000);
+      openMs = await b.ev("(() => { const t = performance.now(); document.querySelector('.vfd-btn[data-act=mg]').click(); return performance.now() - t; })()");
+      await until(() => b.ev("document.querySelectorAll('.vfd-card').length === 4"), "cards");
+      const [gx, gy] = await b.ev(grip);
+      await mouse(b, "mouseMoved", gx, gy);
+      await mouse(b, "mousePressed", gx, gy);
+      await path(Array.from({ length: 150 }, (_, i) => [gx - i * 2, gy + i * 1.5]), 1200);
+      await mouse(b, "mouseReleased", gx - 300, gy + 225);
+      await sleep(500);
+    });
+    await measure("toast", async () => {
+      await b.ev("document.querySelector('.vfd-card').click()");
+      const [gx, gy] = await b.ev(grip);
+      await mouse(b, "mouseMoved", gx, gy);
+      await mouse(b, "mousePressed", gx, gy);
+      await path(Array.from({ length: 150 }, (_, i) => [gx + i * 3, gy - i]), 1200);
+      await mouse(b, "mouseReleased", gx + 450, gy - 150);
+      await sleep(1500);
+    });
+    out.popover.openMs = +openMs.toFixed(1);
+    console.log("popover opens in", out.popover.openMs, "ms of script");
+    if (process.env.VF_PERF_JSON) fs.writeFileSync(process.env.VF_PERF_JSON, JSON.stringify(out, null, 1));
+    for (const k of ["pencil", "shapes", "dragbar", "popover", "toast"]) {
+      check(out[k].max < 100, `${k}: no frame longer than 100 ms (${out[k].max})`);
+    }
+  } finally { b.close(); h.close(); }
+}
+
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
+  if (!only && name === "smooth") continue;   // a measurement, run on request
   console.log(`- ${name}`);
   try { await fn(); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
 }

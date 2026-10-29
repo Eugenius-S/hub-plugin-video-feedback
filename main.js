@@ -261,7 +261,7 @@ function record() {
   r.frames = [];        // frames: {t, kind, phrase, blob, n}
   r.waiting = [];       // phrases waiting for transcription
   r.running = 0;
-  r.grab = grabber(r.screen.getVideoTracks()[0]);
+  r.grab = grabber(r.screen.getVideoTracks()[0], hubRef.url("frame.js"));
   r.ticks = 0;
   r.title = document.title;
   r.tags = [];          // animation tags: {slug, title, t, gone?}
@@ -402,26 +402,45 @@ async function shoot(r, t, kind, extra) {
   } catch { /* no such frame */ }
 }
 
-// a screen shot: JPEG with the long side up to EDGE
-function grabber(track) {
+// a screen shot: JPEG with the long side up to EDGE. The page only takes the frame (ImageCapture, or a bitmap of the video);
+// scaling and encoding go to a worker, so the pen and the island on the page keep their frame rate. No worker: the same on the page.
+function grabber(track, workerUrl) {
   const cap = "ImageCapture" in window ? new ImageCapture(track) : null;
-  let video = null;
-  return async () => {
+  let video = null, worker = null, n = 0;
+  const wait = new Map();
+  const end = () => { for (const ok of wait.values()) ok(null); wait.clear(); };
+  try {
+    if (typeof OffscreenCanvas !== "undefined") {
+      worker = new Worker(workerUrl);
+      worker.onmessage = (e) => { wait.get(e.data.id)?.(e.data.blob); wait.delete(e.data.id); };
+      worker.onerror = () => { worker?.terminate(); worker = null; end(); };
+    }
+  } catch { worker = null; }
+  const grab = async () => {
     let src;
     if (cap) src = await cap.grabFrame();
     else {
       if (!video) { video = document.createElement("video"); video.muted = true; video.srcObject = new MediaStream([track]); await video.play(); }
-      src = video;
+      src = await createImageBitmap(video);
     }
-    const w = src.width || src.videoWidth, h = src.height || src.videoHeight;
-    if (!w || !h) return null;
+    const w = src.width, h = src.height;
+    if (!w || !h) { src.close?.(); return null; }
     const k = Math.min(1, EDGE / Math.max(w, h), Math.sqrt(PIXELS / (w * h)));
+    const cw = Math.round(w * k), ch = Math.round(h * k);
+    if (worker) {
+      const id = ++n;
+      const done = new Promise((ok) => wait.set(id, ok));
+      worker.postMessage({ id, bitmap: src, w: cw, h: ch, quality: QUALITY }, [src]);
+      return done;
+    }
     const c = document.createElement("canvas");
-    c.width = Math.round(w * k); c.height = Math.round(h * k);
-    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+    c.width = cw; c.height = ch;
+    c.getContext("2d").drawImage(src, 0, 0, cw, ch);
     src.close?.();
     return new Promise((ok) => c.toBlob(ok, "image/jpeg", QUALITY));
   };
+  grab.close = () => { worker?.terminate(); worker = null; end(); };
+  return grab;
 }
 
 async function stop() {
@@ -674,6 +693,7 @@ const saveMeta = (r) => (r.id && !r.dead ? keep("rec", null, meta(r)) : Promise.
 function release(r) {
   r.island?.destroy();
   r.unconfine?.();
+  r.grab?.close();
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());
   r.audio?.close();
 }
