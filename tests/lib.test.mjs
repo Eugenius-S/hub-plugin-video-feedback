@@ -1,7 +1,8 @@
 // Video feedback logic without a browser: phrases by pauses, frames, the message text. Run: node --test tests/*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FRAMES, VOICE, bundles, clock, count, frameName, message, phrases, pick, sentSummary, zip } from "../lib.js";
+import { DRAW, FRAMES, INK, VOICE, bundles, clock, count, fadeAlpha, fmtDuration, frameName, geometry, inkFor, luma, matchItem,
+  mediaUrl, meanLuma, message, outline, phrases, pick, sentSummary, stamp, viewToFrame, zip } from "../lib.js";
 import { STR, tr } from "../strings.js";
 
 // loudness over time: speech where [from, to)
@@ -79,7 +80,7 @@ test("message: phrases by time, each with its frames as [Image #N] marks", () =>
   assert.match(lines[0], /^Video feedback, 1:42\./);
   assert.match(lines[0], /Turn this into my feedback/);
   assert.match(lines[0], /The video was not saved/);
-  assert.deepEqual(lines.slice(2), ["0:01 “the button jumps” [Image #1]", "0:05 (unintelligible) [Image #2] [Image #3]"]);
+  assert.deepEqual(lines.slice(2), ["0:01 \u201cthe button jumps\u201d [Image #1]", "0:05 (unintelligible) [Image #2] [Image #3]"]);
 });
 
 test("no voice in the hub and no speech: the message says so", () => {
@@ -135,7 +136,7 @@ test("many frames: the chat gets the best max, all go in an archive; the path, t
 
 test("a value with {placeholders} (a phrase, a path) is inserted as is, never substituted again", () => {
   const text = message({ length: 5000, voice: true, frames: [], phrases: [{ speech: 0, text: "use {path} and $& here" }], audio: "C:/a/{len}.webm", cut: true });
-  assert.match(text, /“use \{path\} and \$& here”/);
+  assert.match(text, /\u201cuse \{path\} and \$& here\u201d/);
   assert.match(text, /saved: `C:\/a\/\{len\}\.webm`/);
 });
 
@@ -216,4 +217,114 @@ test("the message to the session in Russian: the same format, the Russian text a
     assert.match(m, /\[Image #1\]/);
     assert.match(m, /hub voice transcribe --remove "\/a\/v\.webm"/);
   }
+});
+
+// ───── pen island: ink colour, geometry, fading, Motion Gallery tags ─────
+test("the ink adapts: white by default, dark on a light place", () => {
+  assert.equal(luma(0, 0, 0), 0);
+  assert.ok(Math.abs(luma(255, 255, 255) - 1) < 1e-9);
+  assert.equal(inkFor(luma(0, 0, 0)), INK.light);
+  assert.equal(inkFor(luma(255, 255, 255)), INK.dark);
+  assert.equal(inkFor(luma(200, 200, 200)), INK.dark);    // light grey: dark ink
+  assert.equal(inkFor(luma(90, 90, 160)), INK.light);     // a dark blue: white ink
+});
+
+test("meanLuma averages a square of the picture and tells when the square is outside", () => {
+  const w = 4, h = 4, data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) { const v = i % w < 2 ? 0 : 255; data.set([v, v, v, 255], i * 4); }   // left half black, right half white
+  assert.equal(meanLuma(data, w, h, 0.5, 1.5, 0.4), 0);
+  assert.ok(Math.abs(meanLuma(data, w, h, 3, 1, 0.4) - 1) < 1e-9);
+  const mid = meanLuma(data, w, h, 2, 2, 1);
+  assert.ok(mid > 0.3 && mid < 0.8, String(mid));
+  assert.equal(meanLuma(data, w, h, 100, 100, 1), null);
+});
+
+test("geometry: where the page lies in the captured picture", () => {
+  const m = { inner: { w: 1000, h: 600 }, outer: { w: 1016, h: 700 }, screen: { w: 1920, h: 1080 }, pos: { x: 100, y: 50 } };
+  assert.deepEqual(geometry("browser", m), { surface: m.inner, origin: { x: 0, y: 0 } });
+  assert.deepEqual(geometry(undefined, m), { surface: m.inner, origin: { x: 0, y: 0 } });   // unknown: as a tab
+  assert.deepEqual(geometry("window", m), { surface: m.outer, origin: { x: 8, y: 92 } });
+  assert.deepEqual(geometry("monitor", m), { surface: m.screen, origin: { x: 108, y: 142 } });
+  // a point of the page in the frame: the picture is twice as big as the page
+  assert.deepEqual(viewToFrame({ x: 10, y: 20 }, geometry("browser", m), { w: 2000, h: 1200 }), { x: 20, y: 40 });
+  const g = geometry("monitor", m);
+  assert.deepEqual(viewToFrame({ x: 0, y: 0 }, g, { w: 960, h: 540 }), { x: 54, y: 71 });
+});
+
+test("outline: points on the shape to look at the background", () => {
+  const a = { x: 0, y: 0 }, b = { x: 100, y: 50 };
+  assert.deepEqual(outline("pencil", a, b), [a, b]);
+  const line = outline("line", a, b, 4);
+  assert.equal(line.length, 4);
+  assert.deepEqual(line[0], { x: 12.5, y: 6.25 });
+  for (const tool of ["rect", "oval"]) {
+    const pts = outline(tool, a, b, 16);
+    assert.equal(pts.length, 16, tool);
+    for (const p of pts) assert.ok(p.x >= -1e-9 && p.x <= 100 + 1e-9 && p.y >= -1e-9 && p.y <= 50 + 1e-9, `${tool} ${p.x},${p.y}`);
+  }
+  // every point of a rectangle lies on its perimeter
+  for (const p of outline("rect", a, b, 16)) assert.ok(p.x === 0 || p.x === 100 || p.y === 0 || p.y === 50 || Math.abs(p.x % 1) < 1e-9, `${p.x},${p.y}`);
+  assert.equal(outline("rect", a, a, 4).length, 4);        // a zero-size drag does not break
+});
+
+test("a finished stroke stays visible, then fades; hold 0 keeps it", () => {
+  assert.equal(fadeAlpha(0), 1);
+  assert.equal(fadeAlpha(DRAW.hold), 1);
+  assert.equal(fadeAlpha(DRAW.hold + DRAW.fade / 2), 0.5);
+  assert.equal(fadeAlpha(DRAW.hold + DRAW.fade), 0);
+  assert.equal(fadeAlpha(1e9), 0);
+  assert.equal(fadeAlpha(1e9, 0), 1);
+});
+
+test("Motion Gallery: poster address, duration, search", () => {
+  assert.equal(mediaUrl("http://localhost:8799", "/media/a.png"), "http://localhost:8799/media/a.png");
+  assert.equal(mediaUrl("http://localhost:8799", "https://cdn.x/a.png"), "https://cdn.x/a.png");
+  for (const bad of ["javascript:alert(1)", "data:image/png;base64,AA", "//evil.example/a.png", " javascript:1"]) assert.equal(mediaUrl("http://x", bad), "", bad);
+  assert.equal(mediaUrl("http://x", ""), "");
+  assert.equal(fmtDuration(65), "1:05");
+  assert.equal(fmtDuration(4.4), "0:04");
+  assert.equal(fmtDuration(0), "");
+  assert.equal(fmtDuration(undefined), "");
+  const item = { slug: "bounce-in", title: "Bouncy Arrow", tags: ["Ease", "ui"] };
+  assert.ok(matchItem(item, ""));
+  assert.ok(matchItem(item, "arrow"));
+  assert.ok(matchItem(item, "BOUNCE ease"));
+  assert.ok(!matchItem(item, "arrow rocket"));
+  assert.ok(matchItem({ slug: "x" }, "x"));
+  assert.equal(stamp(84000), "01:24");
+  assert.equal(stamp(-5), "00:00");
+});
+
+test("pick: the animation tags always get a picture, even when the frames are over", () => {
+  const frames = [
+    ...Array.from({ length: 6 }, (_, i) => ({ t: i * 1000, kind: "onset", phrase: i })),
+    { t: 2500, kind: "tag", tag: 0 }, { t: 9000, kind: "tag", tag: 1 },
+    ...Array.from({ length: 5 }, (_, i) => ({ t: 500 + i * 3000, kind: "tick" })),
+  ];
+  const got = pick(frames, [1, 1, 1, 1, 1, 1], 4);
+  assert.equal(got.length, 4);
+  assert.equal(got.filter((f) => f.kind === "tag").length, 2);
+  assert.deepEqual(got.map((f) => f.t), [...got.map((f) => f.t)].sort((a, b) => a - b));
+  const many = Array.from({ length: 15 }, (_, i) => ({ t: i, kind: "tag", tag: i }));
+  assert.equal(pick(many, [], 12).length, 12);               // not more than the limit
+});
+
+test("message: animation tags and drawing are told to the session, an undone tag is not", () => {
+  const frames = [{ t: 2500, kind: "tag", tag: 1 }, { t: 1400, phrase: 0 }];
+  const tags = [{ slug: "old", title: "Old", t: 1000, gone: true }, { slug: "pop-in", title: "Pop in", t: 2500 }, { slug: "bare", t: 70e3 }];
+  const text = message({ length: 80e3, voice: true, frames, tags, drew: true, lang: "en", phrases: [{ speech: 1000, text: "put it here" }] });
+  const lines = text.split("\n");
+  assert.ok(lines.includes("0:03 \u00b7 Motion Gallery: Pop in (pop-in) [Image #1]"), text);
+  assert.ok(lines.includes("1:10 \u00b7 Motion Gallery: bare (bare)"), text);
+  assert.ok(!text.includes("old"), "the undone tag is gone");
+  assert.ok(lines.includes("0:01 \u201cput it here\u201d [Image #2]"), "the tag picture is not in a phrase line");
+  assert.match(text, /Animation tags: /);
+  assert.match(text, /I drew on the screen while recording/);
+  const ru = message({ length: 80e3, voice: true, frames: [], tags: [{ slug: "pop-in", title: "Pop in", t: 2500 }], drew: true, lang: "ru", phrases: [] });
+  assert.match(ru, /Теги анимаций:/);
+  assert.match(ru, /Во время записи я рисовал на экране/);
+  const plain = message({ length: 5000, voice: true, frames: [], phrases: [], lang: "en" });
+  assert.ok(!/Animation tags|I drew on the screen/.test(plain), "no tags and no drawing: nothing extra");
+  const onlyGone = message({ length: 5000, voice: true, frames: [], tags: [{ slug: "a", t: 1, gone: true }], phrases: [], lang: "en" });
+  assert.ok(!onlyGone.includes("Animation tags"), "only undone tags: no note");
 });

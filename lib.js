@@ -49,17 +49,19 @@ export function phrases(v = VOICE) {
   };
 }
 
-// frames: [{t, kind: "onset" | "tick", phrase}] -> at most max as pictures; phrase starts first (long phrases matter more),
-// the remaining places go to frames spread evenly over the whole recording (the rest is in the archive)
+// frames: [{t, kind: "tag" | "onset" | "tick", phrase}] -> at most max as pictures; the animation tags first (the owner pointed
+// at them), then phrase starts (long phrases matter more), the remaining places go to frames spread evenly over the whole
+// recording (the rest is in the archive)
 export function pick(frames, lengths, max = FRAMES.max) {
   const byT = (a, b) => a.t - b.t;
+  const tags = frames.filter((f) => f.kind === "tag").sort(byT).slice(0, max);
   const onsets = frames.filter((f) => f.kind === "onset")
-    .sort((a, b) => (lengths[b.phrase] || 0) - (lengths[a.phrase] || 0) || byT(a, b)).slice(0, max);
-  const rest = frames.filter((f) => f.kind !== "onset").sort(byT);
-  const room = Math.min(max - onsets.length, rest.length);
+    .sort((a, b) => (lengths[b.phrase] || 0) - (lengths[a.phrase] || 0) || byT(a, b)).slice(0, max - tags.length);
+  const rest = frames.filter((f) => f.kind !== "onset" && f.kind !== "tag").sort(byT);
+  const room = Math.min(max - onsets.length - tags.length, rest.length);
   const spread = room <= 0 ? [] : room === 1 ? [rest[0]]
     : Array.from({ length: room }, (_, i) => rest[Math.round((i * (rest.length - 1)) / (room - 1))]);
-  return [...onsets, ...spread].sort(byT);
+  return [...tags, ...onsets, ...spread].sort(byT);
 }
 
 // "1 phrase, 3 frames, 5 frames": forms is [one, many] (en) or [one, few, many] (ru)
@@ -145,19 +147,28 @@ export const clock = (ms) => {
 
 // Message text (the session reads it), in the hub language: phrases by time, each with the marks of its frames
 // ([Image #N], like the pictures pasted into the input field). The format is the same in every language.
-export function message({ length, phrases: list, frames, voice, audio, cut, video, archive, lang }) {
+export function message({ length, phrases: list, frames, voice, audio, cut, video, archive, tags = [], drew = false, lang }) {
   const t = (key, vars) => tr(lang, key, vars);
   const head = t("head", { len: clock(length), video: t(video?.length ? "head_video" : "head_novideo") });
   const lines = [];
   let n = 0;
   const label = new Map(frames.map((f) => [f, `[Image #${++n}]`]));
   list.forEach((p, i) => {
-    const mine = frames.filter((f) => f.phrase === i).map((f) => label.get(f));
+    const mine = frames.filter((f) => f.kind !== "tag" && f.phrase === i).map((f) => label.get(f));
     const said = p.text ? t("said", { text: p.text }) : t(voice ? "unclear" : "no_text");
     lines.push(`${clock(p.speech)} ${said}${mine.length ? " " + mine.join(" ") : ""}`);
   });
-  const loose = frames.filter((f) => f.phrase == null || f.phrase >= list.length).map((f) => `${clock(f.t)} ${label.get(f)}`);
+  const loose = frames.filter((f) => f.kind !== "tag" && (f.phrase == null || f.phrase >= list.length)).map((f) => `${clock(f.t)} ${label.get(f)}`);
+  // animation tags: a Motion Gallery item the owner pointed at, at its own moment of the video
+  // (a tag undone with the toast button stays in the list as gone: frame links are by index, so it is skipped here)
+  const tagLines = tags.flatMap((g, i) => {
+    if (g.gone) return [];
+    const shot = frames.find((f) => f.kind === "tag" && f.tag === i);
+    return [`${clock(g.t)} · ${t("tag_line", { title: g.title || g.slug, id: g.slug })}${shot ? " " + label.get(shot) : ""}`];
+  });
   const tail = [];
+  if (tagLines.length) tail.push(t("tags_note"));
+  if (drew) tail.push(t("draw_note"));
   if (!list.length) tail.push(t(voice ? "no_voice" : "voice_off_frames"));
   else if (!voice) tail.push(t("voice_off_phrases"));
   if (archive?.paths?.length) tail.push(t("archive", { frames: count(archive.count, tr(lang, "frame_forms")),
@@ -167,5 +178,93 @@ export function message({ length, phrases: list, frames, voice, audio, cut, vide
   if (video?.length) tail.push(video.length > 1
     ? t("video_parts", { paths: video.map((v) => `\`${v}\``).join(", ") })
     : t("video_one", { path: video[0] }));
-  return [head, "", ...lines, ...loose, ...(tail.length ? ["", ...tail] : [])].join("\n");
+  return [head, "", ...lines, ...loose, ...tagLines, ...(tail.length ? ["", ...tail] : [])].join("\n");
 }
+
+// ───── drawing over the screen: the pen island ─────
+// How bright a pixel looks to the eye, 0 (black) .. 1 (white)
+export const luma = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+// the ink adapts to what is under it: white by default, dark on a light place
+export const INK = { light: "#ffffff", dark: "#18181b", edge: 0.6 };
+export const inkFor = (l) => (l > INK.edge ? INK.dark : INK.light);
+
+// mean brightness of the square [cx-rad, cx+rad] of an RGBA image (ImageData.data), null when the square is outside
+export function meanLuma(data, w, h, cx, cy, rad = 1) {
+  const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(w - 1, Math.ceil(cx + rad));
+  const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(h - 1, Math.ceil(cy + rad));
+  let sum = 0, n = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const i = (y * w + x) * 4;
+    sum += luma(data[i], data[i + 1], data[i + 2]);
+    n++;
+  }
+  return n ? sum / n : null;
+}
+
+// where the page lies in the captured picture. m: {inner, outer, screen: {w, h}, pos: {x, y} (window on the screen)}.
+// A browser tab - the picture is the page itself; a window - the page is under the frame and the title; a monitor - the
+// window sits somewhere on the screen. Unknown surface: as a tab. Returns {surface: {w, h}, origin: {x, y}} in CSS pixels.
+export function geometry(kind, m) {
+  const side = Math.max(0, (m.outer.w - m.inner.w) / 2);
+  const top = Math.max(0, m.outer.h - m.inner.h - side);
+  if (kind === "window") return { surface: m.outer, origin: { x: side, y: top } };
+  if (kind === "monitor") return { surface: m.screen, origin: { x: m.pos.x + side, y: m.pos.y + top } };
+  return { surface: m.inner, origin: { x: 0, y: 0 } };
+}
+
+// a point of the page -> a point of the frame of the given size
+export const viewToFrame = (p, geo, frame) => ({
+  x: ((p.x + geo.origin.x) * frame.w) / geo.surface.w,
+  y: ((p.y + geo.origin.y) * frame.h) / geo.surface.h,
+});
+
+// points on the outline of a shape dragged from a to b: where to look at the background to pick one ink for it
+export function outline(tool, a, b, n = 8) {
+  if (tool === "pencil") return [a, b];
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const u = i / n;
+    if (tool === "line") pts.push({ x: a.x + (b.x - a.x) * (u + 0.5 / n), y: a.y + (b.y - a.y) * (u + 0.5 / n) });
+    else if (tool === "oval") {
+      const ang = u * 2 * Math.PI;
+      pts.push({ x: (a.x + b.x) / 2 + ((b.x - a.x) / 2) * Math.cos(ang), y: (a.y + b.y) / 2 + ((b.y - a.y) / 2) * Math.sin(ang) });
+    } else {   // rect: the perimeter by length
+      const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y), per = 2 * (w + h) || 1, d = u * per;
+      const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+      pts.push(d < w ? { x: x0 + d, y: y0 } : d < w + h ? { x: x0 + w, y: y0 + d - w }
+        : d < 2 * w + h ? { x: x0 + w - (d - w - h), y: y0 + h } : { x: x0, y: y0 + h - (d - 2 * w - h) });
+    }
+  }
+  return pts;
+}
+
+// a stroke that is done stays HOLD ms fully visible, then fades out in FADE ms; hold 0 - it stays until it is erased
+export const DRAW = { hold: 5000, fade: 1200, width: 4 };
+export const fadeAlpha = (age, hold = DRAW.hold, fade = DRAW.fade) =>
+  !hold || age <= hold ? 1 : age >= hold + fade ? 0 : 1 - (age - hold) / fade;
+
+// ───── Motion Gallery tags: the picker over the island ─────
+// A poster or media address from the gallery: absolute http(s) as is, a relative one from the gallery base, anything else
+// (javascript:, data:, //host) is dropped
+export const mediaUrl = (base, src) => !src ? "" : /^https?:\/\//i.test(src) ? src
+  : /^\s*([a-z][a-z0-9+.-]*:|\/\/)/i.test(src) ? "" : base + src;
+
+// "1:05" for the duration badge on a card; nothing when the duration is unknown
+export function fmtDuration(sec) {
+  const n = Math.round(Number(sec));
+  return !Number.isFinite(n) || n <= 0 ? "" : `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
+}
+
+// the search box: every word of the query must be in the title, the slug or a tag (any case); an empty query takes all
+export const matchItem = (item, q) => {
+  const words = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = `${item.title || ""} ${item.slug || ""} ${(item.tags || []).join(" ")}`.toLowerCase();
+  return words.every((w) => hay.includes(w));
+};
+
+// the timecode on the island ("01:24"): where in the recording the tag will go
+export const stamp = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+};

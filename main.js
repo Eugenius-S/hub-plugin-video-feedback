@@ -9,10 +9,14 @@
 // the text said "The video was not saved"); it is erased from the browser after the hub accepted the message.
 // UI texts and the message to the session: en by default, ru when the hub language is Russian (strings.js, picked by
 // hub.lang at use time).
-import { FRAMES, MAX_MS, VOICE, bundles, clock, frameName, message, phrases, pick, sentSummary, zip } from "./lib.js";
+import { FRAMES, MAX_MS, VOICE, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, zip } from "./lib.js";
+import { createIsland, icon } from "./island.js";
 import { tr } from "./strings.js";
 
 const COUNT = 3;
+// Motion Gallery (a separate plugin) serves its catalog on the hub port + 12; it is asked only from a local page
+const MG_PORT = 12, MG_WAIT = 2500;
+const TAG_SHOT = 200;   // a frame this long after a tag is picked: the pick has closed the popover by then
 // two frames a second, 10 minutes - 1200 of them: JPEG is compressed so that screen text stays readable and the archive does not bloat
 const EDGE = 1280, PIXELS = 0.95e6, QUALITY = 0.6;
 const TICK = 250;
@@ -56,7 +60,13 @@ export default function register(hub) {
         b.__trash.setAttribute("aria-label", b.__trash.title);
         b.__trash.append(bin());
         b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
-        root.append(b.__trash, b);
+        // the pen: brings the drawing island back after it was closed (it opens by itself when the recording starts)
+        b.__pen = hub.el("button", "btn round quiet vf-pen");
+        b.__pen.type = "button";
+        b.__pen.hidden = true;
+        b.__pen.append(pen());
+        b.__pen.addEventListener("click", () => { if (R && R.key === root.__ctx.key) R.island?.open(); });
+        root.append(b.__pen, b.__trash, b);
         root.__btn = b;
       }
       buttons.set(ctx.key, b);
@@ -69,7 +79,8 @@ export default function register(hub) {
 function paint(b, key) {
   const mine = R && R.key === key;
   const phase = mine ? R.phase : R ? "busy" : "idle";
-  const sig = phase + (phase === "count" ? R.left : phase === "rec" ? clock(performance.now() - R.t0) : "") + (lang() || "");
+  const penned = mine && phase === "rec" && !!R.island && !R.island.isOpen();   // the island is closed: the pen button brings it back
+  const sig = phase + (phase === "count" ? R.left : phase === "rec" ? clock(performance.now() - R.t0) : "") + (lang() || "") + (penned ? "p" : "");
   if (b.dataset.sig === sig) return;
   b.dataset.sig = sig;
   b.className = "btn round quiet vf-btn vf-" + phase;
@@ -89,6 +100,11 @@ function paint(b, key) {
   b.title = say;
   b.setAttribute("aria-label", say);
   if (b.__trash) b.__trash.hidden = !(mine && (phase === "rec" || phase === "count"));
+  if (b.__pen) {
+    b.__pen.hidden = !penned;
+    b.__pen.title = t("draw_open");
+    b.__pen.setAttribute("aria-label", b.__pen.title);
+  }
 }
 
 function paintAll() {
@@ -111,6 +127,12 @@ function bin() {
   p.setAttribute("stroke-linejoin", "round");
   p.setAttribute("d", "M4 7h16M10 11v6M14 11v6M5.5 7l1 12a2 2 0 0 0 2 1.8h7a2 2 0 0 0 2-1.8l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2");
   s.append(p);
+  return s;
+}
+
+function pen() {
+  const s = icon("pencil");
+  s.setAttribute("class", "icon");
   return s;
 }
 
@@ -151,8 +173,10 @@ async function start(ctx, snap) {
   try { mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
   catch { banner(t("no_mic"), 5000); }
   R = { phase: "count", left: COUNT, key: ctx.key, ctx, screen, mic, voice: !!snap?.voice, cancelled: false };
-  screen.getVideoTracks()[0].addEventListener("ended", () => stop());   // "Stop sharing" in the browser bar
+  const track = screen.getVideoTracks()[0];
+  track.addEventListener("ended", () => stop());   // "Stop sharing" in the browser bar
   const r = R;
+  r.confined = await confine(track);
   for (; r.left > 0; r.left--) {
     banner(t("say_count", { n: r.left }));
     paintAll();
@@ -161,6 +185,55 @@ async function start(ctx, snap) {
   }
   banner("");
   record();
+}
+
+// Leave the pen island out of the recording. Element Capture crops the stream of a browser TAB to <body>; the island is a child
+// of <html>, outside <body>, so it is on screen but not in the video and not in the frames (the strokes live on a canvas
+// inside <body> and are recorded). It works only when the picked surface is a tab (Chrome 132+): a whole screen or a window
+// has no such mechanism, there the island is recorded together with everything else. Returns whether the crop took hold.
+async function confine(track) {
+  try {
+    if (track.getSettings?.().displaySurface !== "browser") return false;
+    const RT = globalThis.RestrictionTarget;
+    if (!RT?.fromElement || !track.restrictTo) return false;
+    await track.restrictTo(await RT.fromElement(document.body));
+    return true;
+  } catch { return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
+}
+
+// the Motion Gallery catalog: {items, base} or null when that plugin is not installed or not running (nothing to show then)
+async function gallery() {
+  const { protocol, hostname, port } = location;
+  if (hostname !== "localhost" && hostname !== "127.0.0.1") return null;
+  const base = `${protocol}//${hostname}:${Number(port || 8787) + MG_PORT}`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), MG_WAIT);
+  try {
+    const res = await fetch(`${base}/gallery.json`, { signal: ctl.signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const items = (Array.isArray(data?.items) ? data.items : []).filter((x) => x && typeof x.slug === "string" && x.slug);
+    return items.length ? { items, base } : null;
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
+
+// a tag: the owner pointed at an animation for this moment of the video. Besides the line in the message, a frame is taken
+// right after (the popover has closed by then) and linked to the tag, so the session sees what was on the screen
+function tag(r, item) {
+  if (R !== r || r.phase !== "rec") return -1;
+  const at = performance.now() - r.t0;
+  const index = r.tags.push({ slug: item.slug, title: String(item.title || item.slug), t: at }) - 1;
+  setTimeout(() => { if (R === r && r.phase === "rec" && r.tags[index]) shoot(r, performance.now() - r.t0, "tag", { tag: index }); }, TAG_SHOT);
+  saveMeta(r);
+  return index;
+}
+function untag(r, index) {
+  const x = r.tags[index];
+  if (!x) return;
+  x.gone = true;   // the index stays: frames already linked to it, the list is never shifted
+  r.frames = r.frames.filter((f) => f.tag !== index);
+  saveMeta(r);
 }
 
 function record() {
@@ -180,6 +253,15 @@ function record() {
   r.grab = grabber(r.screen.getVideoTracks()[0]);
   r.ticks = 0;
   r.title = document.title;
+  r.tags = [];          // animation tags: {slug, title, t, gone?}
+  r.drew = false;
+  r.island = createIsland({
+    el: hubRef.el, t, track: r.screen.getVideoTracks()[0], kind: r.screen.getVideoTracks()[0].getSettings?.().displaySurface,
+    timecode: () => stamp(performance.now() - r.t0), gallery,
+    onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
+    onToggle: () => paintAll(),
+  });
+  r.island.open();
   if (r.mic) {
     r.audio = new AudioContext();
     r.an = r.audio.createAnalyser();
@@ -298,13 +380,13 @@ async function transcribe(p) {
   p.heard = true;
 }
 
-async function shoot(r, t, kind) {
+async function shoot(r, t, kind, extra) {
   const phrase = r.list.length;   // the phrase going on now
   try {
     const blob = await r.grab();
     if (!blob) return;
     const n = r.frameN++;
-    r.frames.push({ t, kind, phrase, blob, n });
+    r.frames.push({ t, kind, phrase, blob, n, ...extra });
     put(r, `${r.id}/f/${pad(n)}`, blob);   // the frame list goes with saveMeta once per 5 s and at stop, not twice a second
   } catch { /* no such frame */ }
 }
@@ -467,7 +549,7 @@ async function deliver(job, ctx) {
       await saveMeta(job);
     }
     const text = message({ length: job.length, phrases: job.list, frames, voice: job.voice, audio: sent.audio,
-      cut: !job.stopped, video: sent.video || null,
+      cut: !job.stopped, video: sent.video || null, tags: job.tags || [], drew: !!job.drew,
       archive: sent.archive?.length ? { paths: sent.archive, count: job.frames.length } : null, lang: lang() });
     await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
     await forget(job.id);
@@ -573,11 +655,13 @@ function meta(r) {
   return { id: r.id, key: r.key, wall: r.wall, voice: !!r.voice, stopped: !!r.stopped, sent: r.sent || null,
     length: r.length ?? (r.t0 != null ? performance.now() - r.t0 : 0),
     list: r.list.map(({ from, speech, to, text }) => ({ from, speech, to, text })),
-    frames: r.frames.map(({ t: at, kind, phrase, n }) => ({ t: at, kind, phrase, n })) };
+    frames: r.frames.map(({ t: at, kind, phrase, n, tag }) => ({ t: at, kind, phrase, n, ...(tag != null ? { tag } : {}) })),
+    tags: r.tags || [], drew: !!r.drew };
 }
 const saveMeta = (r) => (r.id && !r.dead ? keep("rec", null, meta(r)) : Promise.resolve());
 
 function release(r) {
+  r.island?.destroy();
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());
   r.audio?.close();
 }
