@@ -401,6 +401,23 @@ async function ink() {
   }
 }
 
+// 8. stop while the crop of the tab is still being set up (the countdown): the page colours and isolation are put back
+async function stopWhileCropping() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?tab&slowcrop&bg=light");
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(async () => (await phase(b)) === "count", "the countdown", 10000);
+    check(await b.ev("document.body.style.isolation") === "isolate", "the crop is being set up: body is isolated");
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(async () => !(await phase(b)), "the countdown was cancelled", 10000);
+    await sleep(2200);
+    check(await b.ev("document.documentElement.style.backgroundColor + document.body.style.backgroundColor + document.body.style.isolation") === "", "after the stop the page styles are back");
+  } finally { b.close(); h.close(); }
+}
+
 // 8. close wipes the drawing and hides the island; the pen button next to the bin brings it back
 async function closePen() {
   const h = newHub();
@@ -566,7 +583,7 @@ async function confine() {
 }
 
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, closePen, place, theme, tagMg, noGallery, confine };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

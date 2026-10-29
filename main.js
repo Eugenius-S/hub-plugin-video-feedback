@@ -206,10 +206,10 @@ async function confine(track, r) {
     // Element Capture needs the element to be its own stacking context, otherwise the track can stay blank
     body.isolation = "isolate";
     body.backgroundColor = html.backgroundColor = paint;
+    r.unconfine = undo;   // registered before the await: a stop during the countdown must still put the page back
     await track.restrictTo(await RT.fromElement(document.body));
-    r.unconfine = undo;
     return true;
-  } catch { undo(); return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
+  } catch { undo(); r.unconfine = null; return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
 }
 
 // the Motion Gallery catalog: {items, base} or null when that plugin is not installed or not running (nothing to show then)

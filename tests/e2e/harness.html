@@ -49,7 +49,7 @@ navigator.mediaDevices.getDisplayMedia = async () => {
   if (Q.has("tab")) {
     const track = stream.getVideoTracks()[0];
     track.getSettings = () => ({ displaySurface: "browser" });
-    track.restrictTo = async (t) => { window.__restricted = t.el.tagName; };
+    track.restrictTo = async (t) => { if (Q.has("slowcrop")) await new Promise((ok) => setTimeout(ok, 1500)); window.__restricted = t.el.tagName; };
     globalThis.RestrictionTarget = { fromElement: async (el) => ({ el }) };
   }
   return stream;
