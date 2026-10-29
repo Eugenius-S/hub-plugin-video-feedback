@@ -5,6 +5,8 @@ export const STR = {
   en: {
     // button and banners
     trash: "Delete the recording, do not send",
+    rec_trash: "Delete recording",
+    draw_release: "right-click to release",
     say_idle: "Record the screen and voice. Recording starts 3 seconds after you pick the screen",
     say_busy: "A recording is already running in another chat",
     say_count: "Recording in {n}",
@@ -101,6 +103,8 @@ export const STR = {
   },
   ru: {
     trash: "Удалить запись, не отправлять",
+    rec_trash: "Удалить запись",
+    draw_release: "правый клик отпускает",
     say_idle: "Записать экран и голос. Запись начнётся через 3 секунды после выбора экрана",
     say_busy: "Запись уже идёт в другом чате",
     say_count: "Запись через {n}",

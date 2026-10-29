@@ -154,10 +154,23 @@ function cam() {
 }
 
 // a caption over the page: the countdown and errors (the hub tab may be out of sight - the same goes for the button)
+// In full screen only the fullscreen element and what is inside it is shown, so the caption goes inside it (video, iframe and the
+// like cannot hold it: those stay under the page, the island floats out there anyway)
+const bannerHost = () => {
+  const fe = document.fullscreenElement;
+  return fe && fe !== document.documentElement && !/^(video|audio|iframe|embed|object|img|canvas|input|textarea|select|br|hr)$/.test(fe.localName) ? fe : document.body;
+};
+function bannerPut(n) {
+  const h = bannerHost();
+  if (n.parentNode !== h) h.append(n);
+  n.classList.toggle("vf-banner-fs", h !== document.body);
+}
+document.addEventListener("fullscreenchange", () => { const n = document.querySelector(".vf-banner"); if (n) bannerPut(n); });
 function banner(text, ms) {
   let n = document.querySelector(".vf-banner");
   if (!text) return n?.remove();
-  if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); document.body.append(n); }
+  if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); }
+  bannerPut(n);
   n.textContent = text;
   clearTimeout(n.__t);
   if (ms) n.__t = setTimeout(() => n.remove(), ms);
@@ -272,7 +285,7 @@ function record() {
     el: hubRef.el, t,
     timecode: () => stamp(performance.now() - r.t0), gallery,
     onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
-    onToggle: () => paintAll(), onStop: () => stop(),
+    onToggle: () => paintAll(), onStop: () => stop(), onDiscard: () => discard(),
   });
   r.island.open();
   if (r.mic) {

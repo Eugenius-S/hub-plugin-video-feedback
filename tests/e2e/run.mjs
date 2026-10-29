@@ -350,6 +350,48 @@ async function drawTools() {
     await tool(b, "rect");
     await b.page("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === false, "Escape lets go of the tool");
+
+    // the right button lets go of the tool: on the canvas and on the pressed tool, with no context menu
+    const rclick = async (x, y) => {
+      await b.page("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "right", buttons: 2, clickCount: 1 });
+      await b.page("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "right", buttons: 0, clickCount: 1 });
+    };
+    await b.ev(`window.__ctx = 0; window.__ctxPrevented = null; addEventListener("contextmenu", (e) => { window.__ctx++; setTimeout(() => { window.__ctxPrevented = e.defaultPrevented; }); }, true)`);
+    await tool(b, "oval");
+    await rclick(600, 500);
+    check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === false, "a right click on the canvas lets go of the tool");
+    check(await b.ev("window.__ctxPrevented") === true, "the right click on the canvas opens no context menu");
+    await tool(b, "oval");
+    const at = await b.ev("(() => { const r = document.querySelector('.vfd-btn[data-tool=oval]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+    await rclick(...at);
+    check(await b.ev("document.querySelector('.vfd-btn[data-tool=oval]').getAttribute('aria-pressed')") === "false", "a right click on the pressed tool lets go of it");
+    check(await b.ev("window.__ctxPrevented") === true, "the right click on the tool opens no context menu");
+    check(await b.ev("/right/i.test(document.querySelector('.vfd-btn[data-tool=pencil]').dataset.tip)"), "the tool's tip says that a right click lets go");
+  } finally { b.close(); h.close(); }
+}
+
+// 6b. the bin on the island: before the stop button, only while recording, same as the page's own bin: stops and erases, sends nothing
+async function trashBtn() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    const bin = "document.querySelector('.vfd-trash')";
+    check(await b.ev(`!!${bin} && !${bin}.hidden && ${bin}.dataset.act === 'discard'`), "the bin is on the island while recording");
+    check(await b.ev(`${bin}.nextElementSibling.classList.contains('vfd-sep') && ${bin}.nextElementSibling.nextElementSibling === document.querySelector('.vfd-rec')`), "the bin, its own divider, then the stop button");
+    check(await b.ev(`${bin}.dataset.tip`) === "Delete recording", "the bin's tip");
+    await tool(b, "line");
+    await drag(b, [100, 300], [300, 300]);
+    await sleep(1200);
+    await b.ev(`${bin}.click()`);
+    await until(async () => !(await phase(b)), "the bin stops the recording", 20000);
+    await sleep(500);
+    check(h.sends.length === 0, "the bin sends nothing to the hub");
+    check(await b.ev("!document.querySelector('.vfd-island')?.checkVisibility?.()"), "the bin closes the island");
+    check(await b.ev("!!document.querySelector('.vf-banner')"), "the bin shows the note that the recording is erased");
   } finally { b.close(); h.close(); }
 }
 
@@ -591,7 +633,7 @@ async function place() {
     await b.ev("window.__root.querySelector('.vf-pen').click()");
     check((await b.ev(at)).join() === left.join(), "closed and opened again: the same place");
     check(await b.ev("document.querySelectorAll('.vfd-btn[aria-pressed=true]').length") === 0, "the tool is not remembered");
-    await view(b, 520, 300);   // the island with the stop and the float buttons is about 490 px wide
+    await view(b, 580, 300);   // the island with the trash, the stop and the float buttons is about 540 px wide
     await sleep(300);
     const small = await b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return [r.right <= innerWidth, r.bottom <= innerHeight, r.left >= 0, r.top >= 0]; })()");
     check(small.every(Boolean), `a small window keeps the island on the screen (${small})`);
@@ -909,7 +951,7 @@ async function fullscreen() {
   const gripHit = () => b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!e && !!e.closest('.vfd-island'); })()");
   const inView = () => b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()");
   try {
-    await load(b, h, "?bg=light&fs");
+    await load(b, h, `?bg=light&fs${process.env.VF_THEME ? "&theme=" + process.env.VF_THEME : ""}`);   // VF_THEME: for the snapshots in the dark theme
     await view(b);
     await island(b, 0.3);
     // the stop button: only while recording, with the time of the hub's own button
@@ -951,6 +993,21 @@ async function fullscreen() {
     w = await where();
     check(w.root === "html#" && w.canvas === "body#", `full screen left: back on the page (${JSON.stringify(w)})`);
     check(await inView(), "full screen left: the island is on the screen");
+
+    // in full screen the island grows with the interface: scale = height / 900 within 1..1.5, only in full screen
+    check(!(await b.ev("document.querySelector('.vfd-root').style.transform")).includes("scale"), "outside full screen the island is not scaled");
+    await view(b, 1400, 1350);
+    await sleep(300);
+    await enter("fsbox");
+    check((await b.ev("document.querySelector('.vfd-root').style.transform")).endsWith("scale(1.5)"), "full screen at 1350 px: the island is scaled 1.5");
+    check(await b.ev("(() => { const r = document.querySelector('.vfd-root'), i = document.querySelector('.vfd-island').getBoundingClientRect(); return Math.abs(i.width - r.offsetWidth * 1.5) < 2; })()"), "the island is drawn 1.5 times bigger");
+    check(await inView(), "the scaled island is on the screen");
+    await shotOf(b, "fullscreen-island-scaled");
+    check(await gripHit(), "the scaled island takes the mouse");
+    await leave();
+    check(!(await b.ev("document.querySelector('.vfd-root').style.transform")).includes("scale"), "full screen left: the island is not scaled again");
+    await view(b);
+    await sleep(300);
 
     // a video and an image cannot hold the island: the player's own fullscreen button cannot be taken over after the fact (the browser
     // wants a fresh click for a second fullscreen element), so while the island is open the native button is off and our own sits on
@@ -1001,6 +1058,9 @@ async function fullscreen() {
     await mouse(b, "mouseMoved", 5, 5);
     await mouse(b, "mouseMoved", ...(await b.ev("(() => { const r = document.querySelector('.vfd-viewer-media').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")));
     await until(() => b.ev(`!${fsBtn}.hidden`), "fsvid: the button shows on the copy", 5000);
+    // the button stands where the native one stood: circle 48 (icon 36); centre 72/48 from the corner up to 1440 px of the window, 112/56 over it (the browser's bar grows)
+    const fsGeo = () => b.ev(`(() => { const m = document.querySelector('.vfd-viewer-media').getBoundingClientRect(), r = ${fsBtn}.getBoundingClientRect(); return [Math.round(r.width), Math.round(m.right - (r.x + r.width / 2)), Math.round(m.bottom - (r.y + r.height / 2))]; })()`);
+    check(JSON.stringify(await fsGeo()) === "[48,72,48]", `fsvid: the leave button is 48 px, 72/48 from the corner (${await fsGeo()})`);
     await click(await btnCenter());
     await until(() => b.ev("!document.fullscreenElement"), "fsvid: the button leaves full screen", 10000);
     await sleep(500);
@@ -1023,6 +1083,21 @@ async function fullscreen() {
       await leave();
       await back(`${id} (script)`);
     }
+
+    // a window wider than 1440 px: the browser's bar is bigger, so is our button
+    await view(b, 1600, 900);
+    await sleep(300);
+    await enter("fsvid");
+    await until(() => b.ev("document.fullscreenElement?.classList.contains('vfd-viewer')"), "wide: the viewer is the fullscreen element", 10000);
+    await mouse(b, "mouseMoved", 5, 5);
+    await mouse(b, "mouseMoved", ...(await b.ev("(() => { const r = document.querySelector('.vfd-viewer-media').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")));
+    await until(() => b.ev(`!${fsBtn}.hidden`), "wide: the button shows on the copy", 5000);
+    check(JSON.stringify(await fsGeo()) === "[48,112,56]", `wide: the leave button is 48 px, 112/56 from the corner (${await fsGeo()})`);
+    check(await b.ev(`Math.round(${fsBtn}.querySelector('.vfd-i, svg').getBoundingClientRect().width)`) === 36, "wide: the icon in it is 36 px");
+    await leave();
+    await back("wide");
+    await view(b);
+    await sleep(300);
 
     // an iframe cannot be copied: it stays in its own fullscreen, the island stays on the page (it floats out in a browser with
     // Picture-in-Picture for documents, which headless Chrome has not), nothing breaks
@@ -1175,7 +1250,7 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, smooth };
+const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

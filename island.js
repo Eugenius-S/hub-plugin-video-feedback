@@ -30,6 +30,7 @@ const ICONS = {
   pip: "M 4 4 C 2.9069372 4 2 4.9069372 2 6 L 2 18 C 2 19.093063 2.9069372 20 4 20 L 20 20 C 21.093063 20 22 19.093063 22 18 L 22 6 C 22 4.9069372 21.093063 4 20 4 L 4 4 z M 4 6 L 20 6 L 20 18 L 4 18 L 4 6 z M 11 11 L 11 16 L 18 16 L 18 11 L 11 11 z",
   fs: "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z",
   fsExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
+  trash: "M 10 2 L 9 3 L 5 3 L 4 3 L 4 5 L 5 5 L 5 20 C 5 21.093063 5.9069372 22 7 22 L 17 22 C 18.093063 22 19 21.093063 19 20 L 19 5 L 20 5 L 20 3 L 19 3 L 18 3 L 15 3 L 14 2 L 10 2 z M 7 5 L 17 5 L 17 20 L 7 20 L 7 5 z",
   close: "M 4.7070312 3.2929688 L 3.2929688 4.7070312 L 10.585938 12 L 3.2929688 19.292969 L 4.7070312 20.707031 L 12 13.414062 L 19.292969 20.707031 L 20.707031 19.292969 L 13.414062 12 L 20.707031 4.7070312 L 19.292969 3.2929688 L 12 10.585938 L 4.7070312 3.2929688 z",
   search: "M 9 2 C 5.1458514 2 2 5.1458514 2 9 C 2 12.854149 5.1458514 16 9 16 C 10.747998 16 12.345009 15.348024 13.574219 14.28125 L 14 14.707031 L 14 16 L 20 22 L 22 20 L 16 14 L 14.707031 14 L 14.28125 13.574219 C 15.348024 12.345009 16 10.747998 16 9 C 16 5.1458514 12.854149 2 9 2 z M 9 4 C 11.773268 4 14 6.2267316 14 9 C 14 11.773268 11.773268 14 9 14 C 6.2267316 14 4 11.773268 4 9 C 4 6.2267316 6.2267316 4 9 4 z",
 };
@@ -46,7 +47,7 @@ export function icon(name, small) {
 }
 
 // o: {el, t, hold, toastMs, timecode: () => "01:24",
-//     gallery: () => Promise<{items, base} | null>, onTag(item) => index, onUntag(index), onStroke(), onToggle(open), onStop()}
+//     gallery: () => Promise<{items, base} | null>, onTag(item) => index, onUntag(index), onStroke(), onToggle(open), onStop(), onDiscard()}
 export function createIsland(o) {
   const hold = o.hold ?? DRAW.hold;
   const toastMs = o.toastMs ?? 3000;
@@ -79,7 +80,9 @@ export function createIsland(o) {
     const b = btn(o.t("draw_" + id), id);
     b.dataset.tool = id;
     b.setAttribute("aria-pressed", "false");
+    b.dataset.tip = `${o.t("draw_" + id)} · ${o.t("draw_release")}`;   // the right button puts the tool down: said in the tip
     b.addEventListener("click", () => pick(tool === id ? null : id));
+    b.addEventListener("contextmenu", (e) => { if (tool !== id) return; e.preventDefault(); pick(null); });
     return b;
   });
   // the colour button: a round dot of the current ink, right after the grip; it opens the colour popover
@@ -126,9 +129,16 @@ export function createIsland(o) {
   rec.dataset.act = "stop";
   const recTime = o.el("span", "vf-time");
   rec.append(o.el("span", "vf-dot"), recTime);
-  sepRec.hidden = rec.hidden = true;
-  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, rec, o.el("span", "vfd-sep"), float, shut);
+  // the bin before the stop button: the same as the bin by the input field - stop and erase, nothing is sent
+  const sepTrash = o.el("span", "vfd-sep");
+  const trash = btn(o.t("trash"), "trash");
+  trash.classList.add("vfd-trash");
+  trash.dataset.act = "discard";
+  trash.dataset.tip = o.t("rec_trash");
+  sepRec.hidden = trash.hidden = sepTrash.hidden = rec.hidden = true;
+  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, sepTrash, rec, o.el("span", "vfd-sep"), float, shut);
   rec.addEventListener("click", () => { o.onStop?.(); close(); });
+  trash.addEventListener("click", () => { o.onDiscard?.(); close(); });
   // recording(time): the screen is recorded, the button shows the running time; recording(null): it is hidden again
   function recording(time) {
     const on = time != null;
@@ -138,7 +148,7 @@ export function createIsland(o) {
       rec.dataset.tip = o.t("rec_stop");
     }
     if (rec.hidden === !on) return;
-    sepRec.hidden = rec.hidden = !on;
+    sepRec.hidden = trash.hidden = sepTrash.hidden = rec.hidden = !on;
     if (opened) home();   // the bar changed its width: centre it again (a remembered place stays)
   }
   mg.addEventListener("click", () => (pop ? closePop() : openPop()));
@@ -194,6 +204,12 @@ export function createIsland(o) {
   };
   const schedule = () => { if (!frameId) frameId = requestAnimationFrame(frame); };
 
+  // the right button puts the tool down (the page under the canvas is clickable again); with no tool the usual menu opens
+  canvas.addEventListener("contextmenu", (e) => {
+    if (!tool) return;
+    e.preventDefault();
+    pick(null);
+  });
   canvas.addEventListener("pointerdown", (e) => {
     if (!tool || e.button) return;
     e.preventDefault();
@@ -306,15 +322,17 @@ export function createIsland(o) {
   // dragging the island by the grip, anywhere on the page; the place is remembered. The island moves by transform (the compositor,
   // not layout): the pointer handler only keeps the last point, one animation frame moves it, and the sizes are measured once
   const size = { w: 0, h: 0 };
+  let k = 1;   // the island's scale (in full screen it grows with the screen, see scale())
   // the window the island lives in: the hub page, or the Picture-in-Picture window while it floats there
   let win = window, pipWin = null, pipAuto = false;
   const vw = () => win.innerWidth, vh = () => win.innerHeight;
-  const measure = () => { size.w = root.offsetWidth; size.h = root.offsetHeight; };
+  const measure = () => { size.w = root.offsetWidth * k; size.h = root.offsetHeight * k; };   // scale does not change layout sizes: they are multiplied
   const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, vw() - size.w - 4)),
     y: Math.min(Math.max(4, y), Math.max(4, vh() - size.h - 4)) });
+  const put = () => { root.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)${k === 1 ? "" : ` scale(${k})`}`; };   // the scale goes after the move: the move is not scaled
   const place = (x, y) => {
     const p = keepIn(x, y);
-    if (p.x !== pos.x || p.y !== pos.y || !root.style.transform) { pos = p; root.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`; }
+    if (p.x !== pos.x || p.y !== pos.y || !root.style.transform) { pos = p; put(); }
     return p;
   };
   const home = () => {
@@ -630,7 +648,7 @@ export function createIsland(o) {
     if (cpop) closeColor(true);
     else if (pop) { closePop(); mg.focus({ preventScroll: true }); } else if (tool) pick(null);
   };
-  const resize = () => { fit(); if (opened) { home(); if (pop) under(pop, true); if (cpop) under(cpop, true); if (toast) under(toast, true); } };
+  const resize = () => { fit(); if (opened) { scale(); home(); if (pop) under(pop, true); if (cpop) under(cpop, true); if (toast) under(toast, true); } };
 
   // Something is shown in the Fullscreen API: everything outside of it is inert, and the page under it is not drawn over. So the island
   // and the canvas go inside the element that is fullscreen, and back to the page when it leaves. The whole page (<html>) needs nothing.
@@ -642,6 +660,10 @@ export function createIsland(o) {
   let viewer = null;               // {box, el (the original), copy, played}
   const gaveUp = new WeakSet();    // elements whose copy failed: they stay in their own fullscreen
   const canvasTo = (c) => { if (canvas.parentNode !== c) c.append(canvas); };
+  // In full screen the island grows with the screen: the page sizes are drawn for a 900px high window, so k = height / 900 within
+  // 1..1.5 (scale, not zoom: the place is already a transform). In its own window it keeps its size.
+  const fsK = () => document.fullscreenElement && !pipWin ? Math.min(1.5, Math.max(1, window.innerHeight / 900)) : 1;
+  const scale = () => { k = fsK(); if (root.style.transform) put(); };
   function mount() {
     const fe = document.fullscreenElement;
     const inside = fe && fe !== document.documentElement && !NO_CHILDREN.test(fe.localName) && fe.isConnected ? fe : null;
@@ -650,6 +672,7 @@ export function createIsland(o) {
     if (pipWin && awayEl.parentNode !== r) r.append(awayEl);   // and the page has the note in its place
     canvasTo(c);
     if (opened && fsBtn.parentNode !== r) r.append(fsBtn);
+    scale();
   }
 
   function enterViewer(el) {
@@ -719,7 +742,9 @@ export function createIsland(o) {
   // Our button copies the native one: the same place on the bar (measured on Chrome's own bar: the icon's centre is 72px from the
   // right edge of the video and 48px from the bottom, the hover disc is 36px), the same icon, and it is gone where the native bar
   // drops its fullscreen button (a video narrower than 197px or lower than 60px).
-  const FS_SIZE = 36, FS_RIGHT = 72, FS_BOTTOM = 48, FS_MIN_W = 197, FS_MIN_H = 60, FS_IDLE = 3000;
+  // In our full screen box the button is bigger, a round 48px with a 36px icon (CSS .is-big), and stands where the native one stood:
+  // its centre is 72/48px from the corner in a window up to 1440px wide, 112/56px in a wider one (the native bar grows there).
+  const FS_SIZE = 36, FS_RIGHT = 72, FS_BOTTOM = 48, FS_SIZE_FS = 48, FS_RIGHT_WIDE = 112, FS_BOTTOM_WIDE = 56, FS_WIDE = 1440, FS_MIN_W = 197, FS_MIN_H = 60, FS_IDLE = 3000;
   const stripped = new Set();       // the videos whose native button we took away (and give back)
   const fsBtn = o.el("button", "vfd-fs");
   fsBtn.type = "button";
@@ -749,7 +774,9 @@ export function createIsland(o) {
     }
     fsFor = v;
     fsBtn.hidden = false;
-    const x = r.right - FS_RIGHT - FS_SIZE / 2, y = r.bottom - FS_BOTTOM - FS_SIZE / 2;
+    fsBtn.classList.toggle("is-big", out);
+    const wide = out && window.innerWidth > FS_WIDE, d = out ? FS_SIZE_FS : FS_SIZE;
+    const x = r.right - (wide ? FS_RIGHT_WIDE : FS_RIGHT) - d / 2, y = r.bottom - (wide ? FS_BOTTOM_WIDE : FS_BOTTOM) - d / 2;
     fsBtn.style.transform = `translate(${x}px, ${y}px)`;
     clearTimeout(fsIdle);   // the native bar goes away after a few seconds of a still mouse over a playing video; so does the button
     if (!v.paused) fsIdle = setTimeout(fsHide, FS_IDLE);
@@ -848,7 +875,10 @@ export function createIsland(o) {
     closePop(); closeColor(); dismissToast(); tipOff();
     const at = { ...pos };   // where the island was on the page: the note stays there
     root.classList.add("vfd-pip");   // measured as it will look in the window (the timer has room for 10:00), and put back before a paint
+    const k0 = k;
+    k = 1;
     measure();
+    k = k0;
     root.classList.remove("vfd-pip");
     let w;
     try {
