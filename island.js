@@ -12,7 +12,7 @@ const POS = "hub-video-feedback:island";
 const EDGE = 8;        // the popover and the toast keep this far from the screen edge, and sit this far under the island
 const SHOWN = 60;      // cards drawn at once in the popover
 const TOOLS = ["pencil", "rect", "oval", "line"];
-// hub pack m_outlined (Icons8), viewBox 0 0 24 24, currentColor
+// outline icons from the designer's mock-up (Icons8 and Material outlined), viewBox 0 0 24 24, currentColor
 const ICONS = {
   move: "M 12 2 L 8 6 L 11 6 L 11 11 L 6 11 L 6 8 L 2 12 L 6 16 L 6 13 L 11 13 L 11 18 L 8 18 L 12 22 L 16 18 L 13 18 L 13 13 L 18 13 L 18 16 L 22 12 L 18 8 L 18 11 L 13 11 L 13 6 L 16 6 L 12 2 z",
   pencil: "M 18.414062 2 C 18.158062 2 17.902031 2.0979687 17.707031 2.2929688 L 5 15 C 5 15 6.005 15.005 6.5 15.5 C 6.995 15.995 6.984375 16.984375 6.984375 16.984375 C 6.984375 16.984375 8.003 17.003 8.5 17.5 C 8.997 17.997 9 19 9 19 L 21.707031 6.2929688 C 22.098031 5.9019687 22.098031 5.2689063 21.707031 4.8789062 L 19.121094 2.2929688 C 18.926094 2.0979688 18.670063 2 18.414062 2 z M 18.414062 4.4140625 L 19.585938 5.5859375 L 18.537109 6.6347656 L 17.365234 5.4628906 L 18.414062 4.4140625 z M 15.951172 6.8769531 L 17.123047 8.0488281 L 9.4609375 15.710938 C 9.2099375 15.538938 8.9455469 15.408594 8.6855469 15.308594 C 8.5875469 15.050594 8.4590625 14.789063 8.2890625 14.539062 L 15.951172 6.8769531 z M 3.6699219 17 L 3 21 L 7 20.330078 L 3.6699219 17 z",
@@ -332,7 +332,7 @@ export function createIsland(o) {
     const tc = o.timecode();
     const index = o.onTag?.(x);
     closePop();
-    showToast(tc, x.title || x.slug, index);
+    if (index !== -1) showToast(tc, x.title || x.slug, index);   // -1: no tag was set (countdown or the recording is stopping)
   }
 
   // after a tag: "01:24 · title" with Undo, 3 s

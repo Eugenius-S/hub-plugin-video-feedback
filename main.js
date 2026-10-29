@@ -176,7 +176,7 @@ async function start(ctx, snap) {
   const track = screen.getVideoTracks()[0];
   track.addEventListener("ended", () => stop());   // "Stop sharing" in the browser bar
   const r = R;
-  r.confined = await confine(track);
+  r.confined = await confine(track, r);
   for (; r.left > 0; r.left--) {
     banner(t("say_count", { n: r.left }));
     paintAll();
@@ -191,14 +191,18 @@ async function start(ctx, snap) {
 // of <html>, outside <body>, so it is on screen but not in the video and not in the frames (the strokes live on a canvas
 // inside <body> and are recorded). It works only when the picked surface is a tab (Chrome 132+): a whole screen or a window
 // has no such mechanism, there the island is recorded together with everything else. Returns whether the crop took hold.
-async function confine(track) {
+async function confine(track, r) {
+  const was = document.body.style.isolation;
   try {
     if (track.getSettings?.().displaySurface !== "browser") return false;
     const RT = globalThis.RestrictionTarget;
     if (!RT?.fromElement || !track.restrictTo) return false;
+    // Element Capture needs the element to be its own stacking context, otherwise the track can stay blank
+    document.body.style.isolation = "isolate";
     await track.restrictTo(await RT.fromElement(document.body));
+    r.unconfine = () => { document.body.style.isolation = was; };
     return true;
-  } catch { return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
+  } catch { document.body.style.isolation = was; return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
 }
 
 // the Motion Gallery catalog: {items, base} or null when that plugin is not installed or not running (nothing to show then)
@@ -662,6 +666,7 @@ const saveMeta = (r) => (r.id && !r.dead ? keep("rec", null, meta(r)) : Promise.
 
 function release(r) {
   r.island?.destroy();
+  r.unconfine?.();
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());
   r.audio?.close();
 }
