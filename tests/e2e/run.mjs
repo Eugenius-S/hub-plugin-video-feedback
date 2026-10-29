@@ -375,6 +375,13 @@ async function ink() {
       await island(b, 1.5);
       await b.ev(`document.body.insertAdjacentHTML("beforeend", '<div style="position:fixed;inset:0 50% 0 0;background:#fff"></div><div style="position:fixed;inset:0 0 0 50%;background:#000"></div>')`);
       check(await b.ev("getComputedStyle(document.querySelector('.vf-draw')).mixBlendMode") === "difference", "the stroke canvas blends with difference");
+      // a screen with a scale other than 100% (Windows 125%, retina): the canvas keeps the size of the viewport in CSS pixels
+      await b.page("Emulation.setDeviceMetricsOverride", { width: 900, height: 600, deviceScaleFactor: 2, mobile: false });
+      await sleep(300);
+      const box = await b.ev("(() => { const r = document.querySelector('.vf-draw').getBoundingClientRect(); return [r.width, r.height, innerWidth, innerHeight]; })()");
+      check(box[0] === box[2] && box[1] === box[3], `at scale 2 the stroke canvas is as big as the viewport (${box})`);
+      await view(b);
+      await sleep(300);
       await tool(b, "line");
       await drag(b, [150, 300], [250, 300]);
       await drag(b, [750, 300], [850, 300]);

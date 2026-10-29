@@ -19,7 +19,7 @@
 .vfd-root { position: fixed; top: 0; left: 0; z-index: 2147483000; width: max-content; will-change: transform; font-family: var(--font-ui, inherit); }   /* the place is a transform, set by island.js */
 .vfd-root, .vfd-root *, .vfd-root ::before, .vfd-root ::after { box-sizing: border-box; }
 .vfd-root[hidden], .vfd-root [hidden] { display: none !important; }
-.vf-draw { position: fixed; inset: 0; z-index: 2147482990; pointer-events: none; mix-blend-mode: difference; }   /* white ink: an inverse of what lies under it */
+.vf-draw { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2147482990; pointer-events: none; mix-blend-mode: difference; }   /* white ink: an inverse of what lies under it */
 .vf-draw.vf-on { pointer-events: auto; cursor: crosshair; touch-action: none; }
 .vfd-i { width: 20px; height: 20px; fill: currentColor; flex: none; }
 .vfd-i16 { width: 16px; height: 16px; }
