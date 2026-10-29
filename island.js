@@ -6,7 +6,7 @@
 // that colour as it is, no blending and no halo.
 // In full screen the island and the canvas move into the fullscreen element (the rest of the page is inert there). A video or an
 // image cannot hold children, so a video or image shown full screen is swapped for our own fullscreen box with a copy of it (the
-// viewer); the players' native fullscreen button is replaced for the time of the recording (see fsOn). An iframe, an embed or a
+// viewer); the players' native fullscreen button is replaced, in the same place and the same look, for the time of the recording (see fsOn). An iframe, an embed or a
 // canvas cannot be copied: there the island floats out into a Picture-in-Picture window (the pip button, or by pulling it past the
 // edge of the window); only the island goes there, the drawing stays on the page.
 // A Motion Gallery button (only when that plugin answers) opens a popover with posters; a pick tags the animation at the
@@ -666,6 +666,7 @@ export function createIsland(o) {
       copy.playbackRate = el.playbackRate;
       copy.playsInline = true;
       copy.controlsList.add("nofullscreen");   // its own button would take it out of our box: ours exits
+      copy.setAttribute("data-vfd-fs", "");
       copy.addEventListener("loadedmetadata", () => { try { copy.currentTime = el.currentTime; } catch { /* a live stream */ } }, { once: true });
       copy.addEventListener("error", () => { if (viewer?.copy === copy) failViewer(el); }, { once: true });
     } else {
@@ -715,25 +716,30 @@ export function createIsland(o) {
   // it to our box needs a new user action. So while the island is open the videos lose that button (controlsList nofullscreen) and
   // ours takes its place on hover (its click is a fresh user action); a double click does the same, and a page calling
   // requestFullscreen() on a video or an image gets the viewer too. Inside the viewer the same button leaves full screen.
+  // Our button copies the native one: the same place on the bar (measured on Chrome's own bar: the icon's centre is 72px from the
+  // right edge of the video and 48px from the bottom, the hover disc is 36px), the same icon, and it is gone where the native bar
+  // drops its fullscreen button (a video narrower than 197px or lower than 60px).
+  const FS_SIZE = 36, FS_RIGHT = 72, FS_BOTTOM = 48, FS_MIN_W = 197, FS_MIN_H = 60, FS_IDLE = 3000;
   const stripped = new Set();       // the videos whose native button we took away (and give back)
   const fsBtn = o.el("button", "vfd-fs");
   fsBtn.type = "button";
   fsBtn.hidden = true;
   fsBtn.append(icon("fs"));
-  let fsFor = null, fsWatch = null, fsTimer = 0, fsFrame = 0, fsHooked = null;
+  let fsFor = null, fsWatch = null, fsTimer = 0, fsFrame = 0, fsHooked = null, fsIdle = 0;
   const strip = () => {
     for (const v of document.querySelectorAll("video")) {
       if (stripped.has(v) || v.controlsList.contains("nofullscreen")) continue;   // already ours, or the page forbids it
       v.controlsList.add("nofullscreen");
+      v.setAttribute("data-vfd-fs", "");   // the css hides the greyed-out native button that controlsList leaves in its place
       stripped.add(v);
     }
   };
   const swapIcon = (name) => fsBtn.firstChild.firstChild.setAttribute("d", ICONS[name]);
-  const fsHide = () => { fsFor = null; fsBtn.hidden = true; };
+  const fsHide = () => { clearTimeout(fsIdle); fsFor = null; fsBtn.hidden = true; };
   const offered = (v) => v && v.controls && (stripped.has(v) || v === viewer?.copy);
   const fsShow = (v) => {
     const r = v.getBoundingClientRect();
-    if (r.width < 120 || r.height < 80) return fsHide();
+    if (r.width < FS_MIN_W || r.height < FS_MIN_H) return fsHide();
     const out = v === viewer?.copy;
     if (fsFor !== v || fsBtn.hidden) {
       const t = o.t(out ? "draw_fs_exit" : "draw_fs");
@@ -743,8 +749,10 @@ export function createIsland(o) {
     }
     fsFor = v;
     fsBtn.hidden = false;
-    const x = Math.min(r.right, innerWidth) - 8 - 32, y = Math.max(r.top, 0) + 8;
-    fsBtn.style.transform = `translate(${Math.max(x, 0)}px, ${y}px)`;
+    const x = r.right - FS_RIGHT - FS_SIZE / 2, y = r.bottom - FS_BOTTOM - FS_SIZE / 2;
+    fsBtn.style.transform = `translate(${x}px, ${y}px)`;
+    clearTimeout(fsIdle);   // the native bar goes away after a few seconds of a still mouse over a playing video; so does the button
+    if (!v.paused) fsIdle = setTimeout(fsHide, FS_IDLE);
   };
   const videoAt = (e) => {
     for (const el of document.elementsFromPoint(e.clientX, e.clientY)) {
@@ -807,7 +815,7 @@ export function createIsland(o) {
     document.removeEventListener("dblclick", fsDouble, true);
     for (const [name, [orig, mine]] of Object.entries(fsHooked || {})) if (Element.prototype[name] === mine) Element.prototype[name] = orig;
     fsHooked = null;
-    for (const v of stripped) v.controlsList.remove("nofullscreen");
+    for (const v of stripped) { v.controlsList.remove("nofullscreen"); v.removeAttribute("data-vfd-fs"); }
     stripped.clear();
     fsHide();
     fsBtn.remove();

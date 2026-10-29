@@ -16,7 +16,7 @@
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
 
 /* ───── pen island over the screen (the look is the designer's mockup): the theme comes from the hub tokens ───── */
-.vfd-root, .vfd-away, .vfd-fs, .vfd-pip-doc {   /* the island's own names for the hub tokens: one place to retune the look */
+.vfd-root, .vfd-away, .vfd-pip-doc {   /* the island's own names for the hub tokens: one place to retune the look */
   --vfd-surface: var(--card); --vfd-fg: var(--muted-foreground); --vfd-fg-strong: var(--foreground);
   --vfd-hover: var(--accent); --vfd-hover-strong: var(--muted-2); --vfd-on: var(--front-soft); --vfd-on-fg: var(--primary);
   --vfd-line: var(--border); --vfd-pip-pad: 8px;
@@ -53,11 +53,12 @@
 .vfd-viewer { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; z-index: 2147482000; }
 .vfd-viewer:fullscreen { width: 100%; height: 100%; }
 .vfd-viewer-media { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; background: #000; }
-.vfd-fs { position: fixed; top: 0; left: 0; z-index: 2147482995; box-sizing: border-box; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0;
-  border-radius: calc(var(--radius-xl) - var(--space-1)); background: color-mix(in oklch, var(--card, #fff) 92%, transparent); color: var(--vfd-fg-strong, #111);
-  box-shadow: var(--shadow-lift, 0 4px 12px rgb(0 0 0 / .2)); cursor: pointer; transition: color var(--dur-hover, .15s) ease; }
-@media (hover: hover) and (pointer: fine) { .vfd-fs:hover { color: var(--vfd-on-fg, #06f); } }
-.vfd-fs:focus-visible { outline: 2px solid var(--ring, #06f); outline-offset: -2px; }
+/* the fullscreen button copies the native one of the video bar: a bare white icon, a dark disc with a hard edge on hover */
+.vfd-fs { position: fixed; top: 0; left: 0; z-index: 2147482995; box-sizing: border-box; width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 0;
+  border-radius: 50%; background: transparent; color: #fff; cursor: default; }
+@media (hover: hover) and (pointer: fine) { .vfd-fs:hover { background: rgb(32 33 36 / .7); } }
+.vfd-fs:focus-visible { outline: 2px solid rgb(255 255 255 / .9); outline-offset: -2px; }
+video[data-vfd-fs]::-webkit-media-controls-fullscreen-button { opacity: 0; pointer-events: none; }
 .vfd-fs[hidden] { display: none; }
 .vf-draw { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2147482990; pointer-events: none; }
 .vf-draw.vf-on { pointer-events: auto; cursor: crosshair; touch-action: none; }

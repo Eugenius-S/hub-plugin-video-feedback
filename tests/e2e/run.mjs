@@ -354,8 +354,8 @@ async function drawTools() {
 }
 
 // a screenshot of the page as the user sees it -> {w, h, px(x, y)}: 8-bit PNG from Chrome (RGB or RGBA, no interlace)
-async function shot(b) {
-  const png = Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64");
+async function shot(b, clip) {
+  const png = Buffer.from((await b.page("Page.captureScreenshot", { format: "png", ...(clip ? { clip } : {}) })).data, "base64");
   let w = 0, h = 0, bpp = 4, idat = [];
   for (let i = 8; i < png.length;) {
     const len = png.readUInt32BE(i), type = png.toString("latin1", i + 4, i + 8), body = png.subarray(i + 8, i + 8 + len);
@@ -373,7 +373,7 @@ async function shot(b) {
       out[y * row + x] = (src[x] + pred) & 255;
     }
   }
-  return { w, h, px: (x, y) => [...out.subarray(y * row + x * bpp, y * row + x * bpp + 3)] };
+  return { w, h, png, px: (x, y) => [...out.subarray(y * row + x * bpp, y * row + x * bpp + 3)] };
 }
 
 // 7. the ink: one colour for every tool, drawn as it is (no blending), so it shows the same on a white, a light grey and a black
@@ -1043,7 +1043,7 @@ async function fullscreen() {
     await until(() => h.sends.length, "the recording is sent after the stop button", 60000);
     await until(async () => !(await phase(b)), "the recording stopped", 20000);
     check(await b.ev("!document.querySelector('.vfd-island')?.checkVisibility?.()"), "the stop button closes the island");
-    check(await b.ev("!document.getElementById('fsvid').controlsList.contains('nofullscreen') && !document.querySelector('.vfd-fs')"), "closing the island gives the native fullscreen button back");
+    check(await b.ev("!document.getElementById('fsvid').controlsList.contains('nofullscreen') && !document.getElementById('fsvid').hasAttribute('data-vfd-fs') && !document.querySelector('.vfd-fs')"), "closing the island gives the native fullscreen button back");
   } finally { b.close(); h.close(); }
 }
 
@@ -1109,7 +1109,73 @@ async function away() {
 }
 
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, smooth };
+// 13. the fullscreen button copies the one of the native video bar: the same video, paused on the same frame, shot once with the
+// native bar (no island yet) and once with ours (the island open, the native button off), on three widths in both themes; the
+// button and its hover disc are compared pixel by pixel. VF_SHOT_DIR keeps both snapshots of every pair
+async function nativeButton() {
+  const dir = process.env.VF_SHOT_DIR;
+  if (dir) fs.mkdirSync(dir, { recursive: true });
+  const gesture = (b, expr) => b.page("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true });
+  for (const theme of ["light", "dark"]) {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, `?bg=light&fs&theme=${theme}`);
+      await view(b, 1500, 1500);
+      const sizes = [[320, 180], [640, 360], [1280, 720]];
+      const take = async (W, H, state, label) => {
+        const r = await b.ev("(() => { const r = document.getElementById('fsvid').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()");
+        const [bx, by] = state === "hover" ? [r[0] + r[2] - 72, r[1] + r[3] - 48] : [r[0] + 10, r[1] + 10];
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: r[0] + 3, y: r[1] + 3 });
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: bx, y: by });
+        await sleep(700);
+        const img = await shot(b, { x: r[0], y: r[1], width: r[2], height: r[3], scale: 2 });
+        if (dir) fs.writeFileSync(`${dir}/pair-${theme}-${W}-${state}-${label}.png`, img.png);
+        return img;
+      };
+      const results = {};
+      for (const phase of ["native", "ours"]) {
+        if (phase === "ours") await island(b, 0.3);
+        for (const [W, H] of sizes) {
+          await b.ev(`(async () => { const v = document.getElementById('fsvid'); v.style.width = '${W}px'; v.style.height = '${H}px'; window.scrollTo(0, 0);
+            v.pause(); if (v.readyState < 2) await new Promise((ok) => v.addEventListener('loadeddata', ok, { once: true }));
+            v.currentTime = 0.5; await new Promise((ok) => v.addEventListener('seeked', ok, { once: true })); })()`);
+          for (const state of ["idle", "hover"]) results[`${W}-${state}-${phase}`] = await take(W, H, state, phase);
+        }
+      }
+      for (const [W, H] of sizes) for (const state of ["idle", "hover"]) {
+        const a = results[`${W}-${state}-native`], c = results[`${W}-${state}-ours`];
+        const cx = (W - 72) * 2, cy = (H - 48) * 2;
+        let bad = 0, worst = 0, n = 0;
+        for (let y = cy - 40; y < cy + 40; y++) for (let x = cx - 40; x < cx + 40; x++) {
+          const d = Math.max(...a.px(x, y).map((v, i) => Math.abs(v - c.px(x, y)[i])));
+          worst = Math.max(worst, d); n++;
+          if (d > 24) bad++;
+        }
+        console.log(`    ${theme} ${W} ${state}: ${bad} of ${n} pixels differ (worst ${worst})`);
+        check(bad <= n * 0.02, `${theme} ${W}px ${state}: our button looks like the native one (${bad} of ${n} pixels differ)`);
+      }
+      // where the native bar drops its fullscreen button ours is gone too, and it comes back as soon as the bar has it
+      const hoverVideo = async (W, H) => {
+        await b.ev(`(() => { const v = document.getElementById('fsvid'); v.style.width = '${W}px'; v.style.height = '${H}px'; })()`);
+        const r = await b.ev("(() => { const r = document.getElementById('fsvid').getBoundingClientRect(); return [r.x, r.y]; })()");
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: r[0] + 5, y: r[1] + 5 });
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: r[0] + 20, y: r[1] + 20 });
+      };
+      await hoverVideo(180, 101);
+      await sleep(500);
+      check(await b.ev("!document.querySelector('.vfd-fs') || document.querySelector('.vfd-fs').hidden"), `${theme}: a 180px video has no button`);
+      await hoverVideo(300, 50);
+      await sleep(500);
+      check(await b.ev("!document.querySelector('.vfd-fs') || document.querySelector('.vfd-fs').hidden"), `${theme}: a 50px high video has no button`);
+      await hoverVideo(200, 113);
+      await until(() => b.ev("!!document.querySelector('.vfd-fs') && !document.querySelector('.vfd-fs').hidden"), `${theme}: a 200px video has the button`, 5000);
+    } finally { b.close(); h.close(); }
+  }
+}
+
+const cases = { nativeButton, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
