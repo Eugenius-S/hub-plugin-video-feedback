@@ -129,7 +129,8 @@ const GALLERY = [
 // ───── Chrome over CDP ─────
 async function launch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-chrome-"));   // a fresh profile: the cache of an old main.js does not interfere
-  const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`, "--no-first-run",
+  const mode = process.env.VF_HEADED ? ["--window-position=60,40", "--window-size=1296,800"] : ["--headless=new"];   // VF_HEADED: a real window with the GPU
+  const proc = spawn(chrome, [...mode, "--remote-debugging-port=0", `--user-data-dir=${dir}`, "--no-first-run",
     "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required", "--disable-extensions", "about:blank"],
   { stdio: ["ignore", "ignore", "pipe"] });
   const ws = await new Promise((ok, bad) => {
@@ -594,7 +595,9 @@ async function smooth() {
   const out = {};
   try {
     await load(b, h, `?bg=light&pulse&screen=${process.env.VF_PERF_SCREEN || "2560x1440"}`);
-    await b.page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: dsf, mobile: false });
+    if (!process.env.VF_HEADED) await b.page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: dsf, mobile: false });
+    out._run = { label: process.env.VF_LABEL || "", headed: !!process.env.VF_HEADED, dsf, throttle: Number(process.env.VF_PERF_THROTTLE) || 1,
+      screen: process.env.VF_PERF_SCREEN || "2560x1440", page: await b.ev("[innerWidth, innerHeight, devicePixelRatio].join('x')"), ua: await b.ev("navigator.userAgent") };
     if (process.env.VF_PERF_THROTTLE) await b.page("Emulation.setCPUThrottlingRate", { rate: Number(process.env.VF_PERF_THROTTLE) });
     await island(b, 1);
     await b.page("Performance.enable");
