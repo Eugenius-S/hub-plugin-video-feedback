@@ -78,14 +78,52 @@ function newHub(opts = {}) {
     s.server.on("connection", (c) => { s.connections.add(c); c.on("close", () => s.connections.delete(c)); });
     s.server.listen(s.port, "127.0.0.1", () => { s.port = s.server.address().port; ok(); });
   });
+  // gallery: a fake Motion Gallery on the hub port + 12 (where the plugin looks for it), with CORS: the page is another origin
+  s.listenGallery = () => new Promise((ok, bad) => {
+    const g = http.createServer((req, res) => {
+      const url = new URL(req.url, "http://x");
+      const head = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
+      if (url.pathname === "/gallery.json") {
+        res.writeHead(200, { ...head, "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ ready: true, configured: true, items: GALLERY }));
+      }
+      const m = /^\/posters\/(\d+)\.svg$/.exec(url.pathname);
+      if (m) {
+        res.writeHead(200, { ...head, "Content-Type": "image/svg+xml" });
+        return res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="hsl(${m[1] * 70} 60% 50%)"/></svg>`);
+      }
+      res.writeHead(404, head);
+      res.end();
+    });
+    g.on("error", bad);
+    g.listen(s.port + 12, "127.0.0.1", () => { s.galleryServer = g; ok(); });
+  });
+  const listenOnly = s.listen;
+  s.listen = async () => {
+    if (!s.gallery || s.galleryServer) return listenOnly();
+    for (let i = 0; i < 20; i++) {   // the hub port + 12 must be free too
+      s.port = 0;
+      await listenOnly();
+      if (s.port + 12 > 65535) { s.server.close(); continue; }
+      try { await s.listenGallery(); return; } catch { s.server.close(); }
+    }
+    throw new Error("no free pair of ports for the hub and the gallery");
+  };
   s.restart = () => {
     for (const c of s.connections) c.destroy();
     s.server.close();
     setTimeout(() => s.listen(), 3000);
   };
-  s.close = () => { for (const c of s.connections) c.destroy(); s.server?.close(); };
+  s.close = () => { for (const c of s.connections) c.destroy(); s.server?.close(); s.galleryServer?.close(); s.galleryServer?.closeAllConnections?.(); };
   return s;
 }
+
+const GALLERY = [
+  { slug: "fade-in", title: "Soft fade in", tags: ["fade"], duration: 2.4, poster: "/posters/1.svg" },
+  { slug: "slide-up", title: "Slide up", tags: ["move"], duration: 1.8, poster: "/posters/2.svg" },
+  { slug: "bounce", title: "Bounce pop", tags: ["spring"], duration: 3, poster: "/posters/3.svg" },
+  { slug: "typewriter", title: "Typewriter text", tags: ["text"], duration: 65, poster: "/posters/4.svg" },
+];
 
 // ───── Chrome over CDP ─────
 async function launch() {
@@ -250,8 +288,206 @@ async function slowVoice() {
   } finally { b.close(); h.close(); }
 }
 
+// ───── the drawing island ─────
+// a real mouse through CDP (pointer events reach the canvas the way a hand's do)
+const mouse = (b, type, x, y) => b.page("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+async function drag(b, a, c) {
+  await mouse(b, "mouseMoved", a[0], a[1]);
+  await mouse(b, "mousePressed", a[0], a[1]);
+  for (let i = 1; i <= 6; i++) await mouse(b, "mouseMoved", a[0] + ((c[0] - a[0]) * i) / 6, a[1] + ((c[1] - a[1]) * i) / 6);
+  await mouse(b, "mouseReleased", c[0], c[1]);
+}
+const tool = (b, id) => b.ev(`document.querySelector('.vfd-btn[data-tool="${id}"]').click()`);
+const rec = (b) => b.ev("globalThis.__videoFeedback?.()");
+const pixel = (b, x, y) => b.ev(`(() => { const d = document.querySelector('.vf-draw').getContext('2d').getImageData(${x}, ${y}, 1, 1).data; return [d[0], d[1], d[2], d[3]]; })()`);
+async function view(b, w = 1000, h = 700) { await b.page("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false }); }
+async function island(b, seconds = 1) {
+  await record(b, 0);
+  await until(() => b.ev("!!document.querySelector('.vfd-island')"), "the island is on the screen", 10000);
+  await sleep(seconds * 1000);
+}
+
+// 6. four tools: each one is a toggle, draws a stroke, and the recording knows something was drawn
+async function drawTools() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    check(await b.ev("document.querySelector('.vfd-root').parentElement === document.documentElement"), "the island is outside <body> (so it can be cropped away)");
+    check(await b.ev("document.querySelectorAll('.vfd-btn[data-tool]').length") === 4, "four tools: pencil, rectangle, oval, line");
+    check(!(await rec(b)).drew, "nothing drawn yet");
+    let n = 0;
+    for (const id of ["pencil", "rect", "oval", "line"]) {
+      await tool(b, id);
+      check(await b.ev(`document.querySelector('.vfd-btn[data-tool="${id}"]').getAttribute('aria-pressed')`) === "true", `${id}: pressed`);
+      await drag(b, [200, 200 + n * 60], [400, 240 + n * 60]);
+      n++;
+      check(await b.ev("globalThis.__videoFeedback().island.strokes()") === n, `${id}: a stroke is on the screen (${n})`);
+    }
+    check((await rec(b)).drew === true, "the recording knows it was drawn on");
+    await tool(b, "line");
+    check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === false, "the second click lets go of the tool: clicks go to the page again");
+    await tool(b, "rect");
+    await b.page("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === false, "Escape lets go of the tool");
+  } finally { b.close(); h.close(); }
+}
+
+// 7. the ink follows the screen: dark on the white half, white on the black half
+async function ink() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=split");
+    await view(b);
+    await island(b, 1.5);
+    await tool(b, "line");
+    await drag(b, [150, 300], [250, 300]);
+    const onWhite = await pixel(b, 200, 300);
+    await drag(b, [750, 300], [850, 300]);
+    const onBlack = await pixel(b, 800, 300);
+    check(onWhite[3] > 200 && onWhite[0] < 60 && onWhite[2] < 60, `on white the ink is dark (${onWhite})`);
+    check(onBlack[3] > 200 && onBlack[0] > 200 && onBlack[2] > 200, `on black the ink is white (${onBlack})`);
+    await tool(b, "pencil");
+    await drag(b, [150, 400], [850, 400]);
+    const left = await pixel(b, 200, 400);
+    const right = await pixel(b, 800, 400);
+    check(left[0] < 60 && right[0] > 200, `one pencil line changes colour with the screen under it (${left} → ${right})`);
+  } finally { b.close(); h.close(); }
+}
+
+// 8. close wipes the drawing and hides the island; the pen button next to the bin brings it back
+async function closePen() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    const pen = "window.__root.querySelector('.vf-pen')";
+    check(await b.ev(`${pen}.hidden`), "the island is open: no pen button");
+    await tool(b, "rect");
+    await drag(b, [200, 200], [400, 300]);
+    check(await b.ev("globalThis.__videoFeedback().island.strokes()") === 1, "a rectangle is drawn");
+    await b.ev("document.querySelector('.vfd-btn[data-act=close]').click()");
+    check(await b.ev("globalThis.__videoFeedback().island.isOpen()") === false, "closed");
+    check(await b.ev("globalThis.__videoFeedback().island.strokes()") === 0, "the drawing is wiped");
+    check(await b.ev("(() => { const r = document.querySelector('.vfd-root'); return !r || getComputedStyle(r).display === 'none'; })()"), "the island is not on the screen");
+    await until(() => b.ev(`!${pen}.hidden`), "the pen button appears");
+    await b.ev(`${pen}.click()`);
+    check(await b.ev("globalThis.__videoFeedback().island.isOpen()") === true, "the pen button brings the island back");
+    check(await b.ev(`${pen}.hidden`) === true || await until(() => b.ev(`${pen}.hidden`), "the pen goes away again"), "no pen button while the island is open");
+    check(await b.ev("globalThis.__videoFeedback().phase") === "rec", "the recording went on all along");
+  } finally { b.close(); h.close(); }
+}
+
+// 9. the island takes its colours from the hub theme, and can be dragged by the grip
+async function theme() {
+  const bgs = {};
+  for (const th of ["dark", "light"]) {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, `?theme=${th}&bg=light`);
+      await view(b);
+      await island(b, 0.3);
+      bgs[th] = await b.ev("getComputedStyle(document.querySelector('.vfd-island')).backgroundColor");
+      if (th === "dark") {
+        const before = await b.ev("document.querySelector('.vfd-root').offsetLeft");
+        await drag(b, [await b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return r.x + r.width / 2; })()"),
+          await b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return r.y + r.height / 2; })()")], [300, 400]);
+        const after = await b.ev("[document.querySelector('.vfd-root').offsetLeft, document.querySelector('.vfd-root').offsetTop]");
+        check(after[0] !== before && after[1] > 100, `the grip drags the island (${before} → ${after})`);
+        check(await b.ev("!!localStorage.getItem('hub-video-feedback:island')"), "the place is remembered");
+      }
+    } finally { b.close(); h.close(); }
+  }
+  check(bgs.dark === "rgb(38, 38, 43)", `dark theme: dark island (${bgs.dark})`);
+  check(bgs.light === "rgb(255, 255, 255)", `light theme: light island (${bgs.light})`);
+}
+
+// 10. Motion Gallery installed: its icon is on the island; a card puts a tag at the moment of the click, the tag goes
+// into the message with its time, and Undo takes it back
+async function tagMg() {
+  const h = newHub({ gallery: true });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b, 0.5);
+    const btn = "document.querySelector('.vfd-btn[data-act=mg]')";
+    await until(() => b.ev(`!${btn}.hidden`), "the Motion Gallery icon appears (the gallery answered)", 20000);
+    await b.ev(`${btn}.click()`);
+    await until(() => b.ev("document.querySelectorAll('.vfd-card').length === 4"), "four cards in the popover");
+    check(await b.ev(`${btn}.getAttribute('aria-expanded')`) === "true", "the icon is pressed while the popover is open");
+    const dur = await b.ev("[...document.querySelectorAll('.vfd-card')].map((c) => c.querySelector('.vfd-dur').textContent)");
+    check(dur.includes("1:05") && dur.includes("0:03"), `durations on the posters (${dur})`);
+    await b.ev("(() => { const f = document.querySelector('.vfd-find'); f.value = 'bounce'; f.dispatchEvent(new Event('input')); })()");
+    check(await b.ev("document.querySelectorAll('.vfd-card').length") === 1, "search leaves one card");
+    await b.ev("document.querySelector('.vfd-card').click()");
+    check(await b.ev("globalThis.__videoFeedback().tags.length") === 1, "one tag is set");
+    const tg = (await rec(b)).tags[0];
+    check(tg.slug === "bounce" && tg.title === "Bounce pop" && tg.t > 0, `the tag keeps the card and the time (${JSON.stringify(tg)})`);
+    check(await b.ev("!!document.querySelector('.vfd-toast')"), "a toast says the tag is placed");
+    check(await b.ev("!document.querySelector('.vfd-pop')"), "the popover is closed after the pick");
+    await b.ev(`${btn}.click()`);
+    await until(() => b.ev("document.querySelectorAll('.vfd-card').length === 4"), "the popover opens again");
+    await b.ev("(() => { const f = document.querySelector('.vfd-find'); f.value = 'slide'; f.dispatchEvent(new Event('input')); })()");
+    await b.page("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await b.ev("document.querySelector('.vfd-find')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))");
+    await until(async () => (await rec(b)).tags.length === 2, "Enter in the search takes the first card");
+    await b.ev("document.querySelector('.vfd-toast-undo').click()");
+    check((await rec(b)).tags.filter((x) => x.gone).length === 1, "Undo marks the last tag as taken back");
+    await sleep(500);
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(() => h.sends.length, "the message in the chat", 60000);
+    const text = h.sends[0].text;
+    check(/\d+:\d\d · Motion Gallery: Bounce pop \(bounce\)/.test(text), `the message has the tag with its time (${text.slice(0, 400)})`);
+    check(!text.includes("(slide-up)"), "the tag taken back is not in the message");
+    check(text.includes("Animation tags:"), "the message says what the tags mean");
+    check(h.sends[0].metas?.length >= 1, "the frame of the tag is among the pictures");
+  } finally { b.close(); h.close(); }
+}
+
+// 11. no Motion Gallery: no icon on the island
+async function noGallery() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b, 4);
+    check(await b.ev("document.querySelector('.vfd-btn[data-act=mg]').hidden"), "no gallery: no Motion Gallery icon");
+    check(await b.ev("document.querySelectorAll('.vfd-btn[data-tool]').length") === 4, "the drawing tools are there anyway");
+  } finally { b.close(); h.close(); }
+}
+
+// 12. a browser tab can be cropped to <body> (the island is left out of the video); a screen or a window cannot
+async function confine() {
+  for (const tab of [true, false]) {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, tab ? "?tab" : "");
+      await island(b, 0.3);
+      const r = await rec(b);
+      check(r.confined === tab, `${tab ? "tab" : "screen"}: confined is ${tab}`);
+      check(await b.ev("window.__restricted || null") === (tab ? "BODY" : null), tab ? "the stream is cropped to <body>" : "the stream is not cropped");
+    } finally { b.close(); h.close(); }
+  }
+}
+
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, closePen, theme, tagMg, noGallery, confine };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

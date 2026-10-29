@@ -1,16 +1,41 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>video-feedback harness</title>
+<style>
+/* hub theme tokens (the designer's mock-up): ?theme=dark|light */
+:root, .t-light { color-scheme: light; --background: #fff; --foreground: #18181b; --card: #fff; --muted: #f4f4f5; --muted-foreground: #62626b;
+  --accent: #ececef; --border: #e4e4e7; --input: #e4e4e7; --primary: #4f6cf6; --ring: #4f6cf6; --outline-image: rgb(0 0 0 / .1);
+  --front-soft: color-mix(in oklch, var(--primary) 12%, transparent); }
+.t-dark { color-scheme: dark; --background: #1c1c20; --foreground: #f6f6f8; --card: #26262b; --muted: #2e2e34; --muted-foreground: #a0a0ab;
+  --accent: #34343b; --border: #3a3a42; --input: #3a3a42; --primary: #8ea0ff; --ring: #8ea0ff; --outline-image: rgb(255 255 255 / .12); }
+:root { --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
+  --radius: 8px; --radius-xs: 6px; --radius-sm: 4px; --radius-lg: 12px; --radius-xl: 16px; --ui-scale: 1.0667;
+  --text-xs: calc(12px * var(--ui-scale)); --text-sm: calc(14px * var(--ui-scale)); --text-base: calc(15px * var(--ui-scale));
+  --font-ui: Onest, -apple-system, "Segoe UI", sans-serif; --font-code: "Geist Mono", ui-monospace, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --dur-fast: 160ms; --dur-hover: 120ms;
+  --shadow-lift: 0 8px 24px rgb(0 0 0 / .18); }
+body { background: var(--background); color: var(--foreground); font-family: var(--font-ui); }
+</style>
 <body>
 <script type="module">
 // Harness page: a fake hub (post -> the test server), the screen is a canvas captureStream, the microphone is an oscillator.
 // hub.lang is undefined (the plugin shows English); a test sets window.__hub.lang to switch the language.
+const Q = new URLSearchParams(location.search);
+document.documentElement.classList.add(Q.get("theme") === "dark" ? "t-dark" : "t-light");
+// ?bg=light|dark|split: a still "screen" (white, black, or white on the left and black on the right) - the ink colour test
 navigator.mediaDevices.getDisplayMedia = async () => {
   const c = document.createElement("canvas");
   c.width = 640; c.height = 360;
   const g = c.getContext("2d");
   let n = 0;
+  const bg = Q.get("bg");
   const draw = () => {
+    if (bg) {
+      g.fillStyle = bg === "dark" ? "#000" : "#fff";
+      g.fillRect(0, 0, 640, 360);
+      if (bg === "split") { g.fillStyle = "#000"; g.fillRect(320, 0, 320, 360); }
+      return;
+    }
     g.fillStyle = `hsl(${(n * 9) % 360} 60% 45%)`;
     g.fillRect(0, 0, 640, 360);
     g.fillStyle = "#fff";
@@ -19,7 +44,15 @@ navigator.mediaDevices.getDisplayMedia = async () => {
   };
   draw();
   setInterval(draw, 100);
-  return c.captureStream(10);
+  const stream = c.captureStream(10);
+  // ?tab: the picked surface is a browser tab, and the browser can crop it to an element (Element Capture) - a spy for the crop
+  if (Q.has("tab")) {
+    const track = stream.getVideoTracks()[0];
+    track.getSettings = () => ({ displaySurface: "browser" });
+    track.restrictTo = async (t) => { window.__restricted = t.el.tagName; };
+    globalThis.RestrictionTarget = { fromElement: async (el) => ({ el }) };
+  }
+  return stream;
 };
 navigator.mediaDevices.getUserMedia = async () => {
   const ac = new AudioContext();
@@ -34,7 +67,7 @@ navigator.mediaDevices.getUserMedia = async () => {
 };
 const hub = {
   url: (name) => `/${name}`,
-  addStyle() {},
+  addStyle(name) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = `/${name}`; document.head.append(l); },
   el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; },
   async post(path, body) {
     try {
