@@ -80,6 +80,11 @@ const hub = {
   addSlot(place, spec) { window.__slot = spec; },
 };
 window.__hub = hub;
+// ?fs: things to put into full screen - a plain block, a video and an iframe
+if (Q.has("fs")) {
+  document.body.insertAdjacentHTML("afterbegin", `<div id="fsbox" style="width:600px;height:400px;background:#cde"></div>
+    <video id="fsvid" style="width:300px;height:200px"></video><iframe id="fsifr" srcdoc="<body>x</body>" style="width:300px;height:200px"></iframe>`);
+}
 const { default: register } = await import("/main.js");
 register(hub);
 const root = document.createElement("div");

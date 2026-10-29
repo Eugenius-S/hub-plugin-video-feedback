@@ -413,8 +413,8 @@ async function ink() {
 }
 
 // 7b. the colour popover: a colour picked once goes to every tool, to the next stroke on the open canvas (earlier strokes keep
-// theirs), is remembered, and survives a reload; a broken stored value falls back to the default. The stroke has an edge of the
-// opposite lightness (dark round a light ink, light round a dark one), so it shows on any page
+// theirs), is remembered, and survives a reload; a broken stored value falls back to the default. The stroke is the picked colour as it is,
+// with no halo round it
 async function inkPick() {
   const h = newHub();
   await h.listen();
@@ -438,8 +438,8 @@ async function inkPick() {
     await tool(b, "line");
     await drag(b, [100, 300], [200, 300]);
     check(near(await pixel(b, 150, 300), [...DEFAULT_INK, 255], 2), "the first stroke has the default colour");
-    // the edge of a light ink is dark: the row just outside the 4 px core
-    { const e = await pixelNow(b, 150, 302); check(e[0] === 0 && e[1] === 0 && e[2] === 0 && e[3] > 60 && e[3] < 200, `a light ink has a dark edge (${e})`); }
+    // no halo: the row just outside the 4 px core is empty
+    { const e = await pixelNow(b, 150, 302); check(e[3] === 0, `a light ink has no halo (${e})`); }
     await toggle();
     check(await isOpen(), "a click on the colour button opens the popover");
     check(await b.ev("document.querySelector('.vfd-color').getAttribute('aria-expanded')") === "true", "aria-expanded is true");
@@ -468,7 +468,7 @@ async function inkPick() {
     check(near(await pixel(b, 150, 400), want, 2), "pencil: the new colour");
     check(near(await pixel(b, 100, 485), want, 2), "rectangle: the new colour");
     check(near(await pixel(b, 300, 485), want, 2), "oval: the new colour");
-    // a ready colour sets the ink and closes the popover; a dark ink has a light edge
+    // a ready colour sets the ink and closes the popover; no halo around it
     await toggle();
     await swatch("#1C1C1E");
     check(!(await isOpen()), "a ready colour closes the popover");
@@ -476,7 +476,7 @@ async function inkPick() {
     await tool(b, "line");
     await drag(b, [100, 560], [200, 560]);
     check(near(await pixel(b, 150, 560), [0x1c, 0x1c, 0x1e, 255], 2), "the black swatch draws black");
-    { const e = await pixelNow(b, 150, 562); check(e[0] === 255 && e[1] === 255 && e[2] === 255 && e[3] > 100, `a dark ink has a light edge (${e})`); }
+    { const e = await pixelNow(b, 150, 562); check(e[3] === 0, `a dark ink has no halo (${e})`); }
     // the square and the strip: a drag sets a colour, the popover stays
     await toggle();
     const sv = await b.ev("(() => { const r = document.querySelector('.vfd-sv').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()");
@@ -582,7 +582,7 @@ async function place() {
     await b.ev("window.__root.querySelector('.vf-pen').click()");
     check((await b.ev(at)).join() === left.join(), "closed and opened again: the same place");
     check(await b.ev("document.querySelectorAll('.vfd-btn[aria-pressed=true]').length") === 0, "the tool is not remembered");
-    await view(b, 420, 300);
+    await view(b, 480, 300);   // the island with the stop button is 450 px wide
     await sleep(300);
     const small = await b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return [r.right <= innerWidth, r.bottom <= innerHeight, r.left >= 0, r.top >= 0]; })()");
     check(small.every(Boolean), `a small window keeps the island on the screen (${small})`);
@@ -710,7 +710,8 @@ async function smooth() {
   const out = {};
   try {
     await load(b, h, `?bg=light&pulse&screen=${process.env.VF_PERF_SCREEN || "2560x1440"}`);
-    if (!process.env.VF_HEADED) await b.page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: dsf, mobile: false });
+    const [PW, PH] = (process.env.VF_PERF_PAGE || "1280x720").split("x").map(Number);   // VF_PERF_PAGE=3440x1440: a page as big as a wide monitor
+    if (!process.env.VF_HEADED) await b.page("Emulation.setDeviceMetricsOverride", { width: PW, height: PH, deviceScaleFactor: dsf, mobile: false });
     out._run = { label: process.env.VF_LABEL || "", headed: !!process.env.VF_HEADED, dsf, throttle: Number(process.env.VF_PERF_THROTTLE) || 1,
       screen: process.env.VF_PERF_SCREEN || "2560x1440", page: await b.ev("[innerWidth, innerHeight, devicePixelRatio].join('x')"), ua: await b.ev("navigator.userAgent") };
     if (process.env.VF_PERF_THROTTLE) await b.page("Emulation.setCPUThrottlingRate", { rate: Number(process.env.VF_PERF_THROTTLE) });
@@ -760,6 +761,15 @@ async function smooth() {
         await path(pts, 2000);
         await mouse(b, "mouseReleased", pts[pts.length - 1][0], pts[pts.length - 1][1]);
       }
+    });
+    // one long curve across the whole page: the stroke keeps growing, a real hand on a big monitor
+    await measure("long", async () => {
+      await tool(b, "pencil");
+      const n = 900, pts = Array.from({ length: n }, (_, i) => [60 + ((PW - 120) * i) / n, PH / 2 + (PH / 3) * Math.sin(i / 45) * Math.cos(i / 170)]);
+      await mouse(b, "mouseMoved", pts[0][0], pts[0][1]);
+      await mouse(b, "mousePressed", pts[0][0], pts[0][1]);
+      await path(pts, 4000);
+      await mouse(b, "mouseReleased", pts[n - 1][0], pts[n - 1][1]);
     });
     await measure("shapes", async () => {
       for (const id of ["rect", "oval", "line"]) {
@@ -860,8 +870,98 @@ async function shots() {
   }
 }
 
+// 11. full screen: the island and the canvas move into the fullscreen element (the rest of the page is inert there), the island
+// still takes the mouse and the canvas still draws; a video or an iframe cannot hold children, so there they stay on the page.
+// The island also has a stop button while a recording runs
+async function fullscreen() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  const gesture = (expr) => b.page("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true });
+  const enter = async (id) => {
+    const r = await gesture(`document.${id === "html" ? "documentElement" : `getElementById("${id}")`}.requestFullscreen().then(() => "ok", (e) => String(e))`);
+    check(r.result.value === "ok", `${id}: full screen entered (${r.result.value})`);
+    await until(() => b.ev("!!document.fullscreenElement"), `${id}: fullscreenElement is set`, 10000);
+    await sleep(500);
+  };
+  const leave = async () => {
+    await gesture("document.exitFullscreen().then(() => 1)");
+    await until(() => b.ev("!document.fullscreenElement"), "full screen left", 10000);
+    await sleep(500);
+  };
+  const where = () => b.ev("({ root: document.querySelector('.vfd-root').parentElement.localName + '#' + document.querySelector('.vfd-root').parentElement.id, canvas: document.querySelector('.vf-draw').parentElement.localName + '#' + document.querySelector('.vf-draw').parentElement.id })");
+  const gripAt = () => b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+  const gripHit = () => b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!e && !!e.closest('.vfd-island'); })()");
+  const inView = () => b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()");
+  try {
+    await load(b, h, "?bg=light&fs");
+    await view(b);
+    await island(b, 0.3);
+    // the stop button: only while recording, with the time of the hub's own button
+    const stopBtn = "document.querySelector('.vfd-rec')";
+    check(await b.ev(`!${stopBtn}.hidden && /^\\d+:\\d\\d$/.test(${stopBtn}.querySelector('.vf-time').textContent)`), "the stop button is on the island with the time");
+    check(await b.ev(`${stopBtn}.nextElementSibling.classList.contains('vfd-sep') && ${stopBtn}.previousElementSibling.classList.contains('vfd-sep')`), "the stop button has a divider on each side");
+    await tool(b, "pencil");
+    await drag(b, [100, 300], [200, 300]);
+    check(near(await pixel(b, 150, 300), [...DEFAULT_INK, 255], 2), "a stroke on the page before full screen");
+
+    // the whole page
+    await enter("html");
+    check(await b.ev("document.querySelector('.vfd-root').parentElement === document.documentElement"), "the whole page: the island stays outside <body>");
+    check(await gripHit(), "the whole page: the island takes the mouse");
+    await tool(b, "line");
+    await drag(b, [100, 400], [200, 400]);
+    check(near(await pixel(b, 150, 400), [...DEFAULT_INK, 255], 2), "the whole page: the canvas draws");
+    await leave();
+
+    // a block
+    await enter("fsbox");
+    check(await b.ev("document.fullscreenElement.id") === "fsbox", "the block is the fullscreen element");
+    let w = await where();
+    check(w.root === "div#fsbox" && w.canvas === "div#fsbox", `a block: the island and the canvas are inside it (${JSON.stringify(w)})`);
+    check(await inView(), "a block: the island is on the screen");
+    check(await gripHit(), "a block: the island takes the mouse");
+    const before = await gripAt();
+    await drag(b, before, [before[0] + 150, before[1] + 120]);
+    const after = await gripAt();
+    check(Math.abs(after[0] - before[0] - 150) < 10 && Math.abs(after[1] - before[1] - 120) < 10, `a block: the grip drags the island (${before} → ${after})`);
+    await tool(b, "pencil");   // another tool than before: a second click on the same one would put it down
+    await drag(b, [100, 250], [200, 250]);
+    check(near(await pixel(b, 150, 250), [...DEFAULT_INK, 255], 2), "a block: the canvas draws");
+    await b.ev("document.querySelector('.vfd-color').click()");
+    await sleep(300);
+    check(await b.ev("(() => { const r = document.querySelector('.vfd-sw').getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!e && !!e.closest('.vfd-cpop'); })()"), "a block: the colour popover is on the screen and takes the mouse");
+    await b.ev("document.querySelector('.vfd-color').click()");
+    await leave();
+    w = await where();
+    check(w.root === "html#" && w.canvas === "body#", `full screen left: back on the page (${JSON.stringify(w)})`);
+    check(await inView(), "full screen left: the island is on the screen");
+
+    // a video and an iframe cannot hold the island: it stays on the page, nothing breaks
+    for (const id of ["fsvid", "fsifr"]) {
+      await enter(id);
+      w = await where();
+      check(w.root === "html#" && w.canvas === "body#", `${id}: no children possible, the island stays on the page`);
+      check(await phase(b) === "rec", `${id}: the recording goes on`);
+      await leave();
+    }
+
+    // F11: the window gets big without a fullscreen element
+    await view(b, 1600, 900);
+    await sleep(300);
+    check(await inView(), "a bigger window: the island is on the screen");
+    check(await b.ev("document.querySelector('.vf-draw').width >= 1600"), "a bigger window: the canvas follows");
+
+    // the stop button stops and sends, the island goes away
+    await b.ev(`${stopBtn}.click()`);
+    await until(() => h.sends.length, "the recording is sent after the stop button", 60000);
+    await until(async () => !(await phase(b)), "the recording stopped", 20000);
+    check(await b.ev("!document.querySelector('.vfd-island')?.checkVisibility?.()"), "the stop button closes the island");
+  } finally { b.close(); h.close(); }
+}
+
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, smooth };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

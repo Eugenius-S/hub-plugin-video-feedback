@@ -3,10 +3,12 @@
 // child of <html>, outside <body>, so the capture of the hub tab can leave it out (Element Capture, see confine() in main.js).
 // One ink colour serves every tool: a round button next to the grip opens the colour popover (8 ready colours, a square, a hue
 // strip, hex), the choice is remembered (localStorage) and applies to the next stroke on the open canvas. A stroke is drawn in
-// that colour as it is, no blending, with a thin edge of the opposite lightness so it reads on any background.
+// that colour as it is, no blending and no halo.
+// In full screen the island and the canvas move into the fullscreen element (the rest of the page is inert there); a video or an
+// iframe cannot hold children, so there they stay on the page.
 // A Motion Gallery button (only when that plugin answers) opens a popover with posters; a pick tags the animation at the
 // current moment of the video. The look follows the designer's mock-up (vfd-* classes in style.css, tokens of the hub theme).
-import { COLORS, DRAW, INK_KEY, count, edgeOf, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb, inkColor, matchItem, mediaUrl, rgb2hex, rgb2hsv } from "./lib.js";
+import { COLORS, DRAW, INK_KEY, count, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb, inkColor, matchItem, mediaUrl, rgb2hex, rgb2hsv } from "./lib.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const POS = "hub-video-feedback:island";
@@ -37,7 +39,7 @@ export function icon(name, small) {
 }
 
 // o: {el, t, hold, toastMs, timecode: () => "01:24",
-//     gallery: () => Promise<{items, base} | null>, onTag(item) => index, onUntag(index), onStroke(), onToggle(open)}
+//     gallery: () => Promise<{items, base} | null>, onTag(item) => index, onUntag(index), onStroke(), onToggle(open), onStop()}
 export function createIsland(o) {
   const hold = o.hold ?? DRAW.hold;
   const toastMs = o.toastMs ?? 3000;
@@ -100,7 +102,28 @@ export function createIsland(o) {
   sepMg.hidden = mg.hidden = true;   // only when Motion Gallery answers
   const shut = btn(o.t("draw_close"), "close");
   shut.dataset.act = "close";
-  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, o.el("span", "vfd-sep"), shut);
+  // the stop button: the red dot and the running time, as the hub's record button; only while the screen is recorded
+  const sepRec = o.el("span", "vfd-sep");
+  const rec = o.el("button", "vfd-btn vfd-rec");
+  rec.type = "button";
+  rec.dataset.act = "stop";
+  const recTime = o.el("span", "vf-time");
+  rec.append(o.el("span", "vf-dot"), recTime);
+  sepRec.hidden = rec.hidden = true;
+  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, rec, o.el("span", "vfd-sep"), shut);
+  rec.addEventListener("click", () => { o.onStop?.(); close(); });
+  // recording(time): the screen is recorded, the button shows the running time; recording(null): it is hidden again
+  function recording(time) {
+    const on = time != null;
+    if (on) {
+      recTime.textContent = time;
+      rec.setAttribute("aria-label", o.t("rec_stop_now", { time }));
+      rec.dataset.tip = o.t("rec_stop");
+    }
+    if (rec.hidden === !on) return;
+    sepRec.hidden = rec.hidden = !on;
+    if (opened) home();   // the bar changed its width: centre it again (a remembered place stays)
+  }
   mg.addEventListener("click", () => (pop ? closePop() : openPop()));
   shut.addEventListener("click", () => close());
 
@@ -141,9 +164,9 @@ export function createIsland(o) {
   }
 
   // Drawing stays off the pointer handlers: they only record points (no layout reads, no painting); one animation frame paints
-  // what changed, and only inside the rectangle that changed (`dirty`); the strokes touching it are painted again whole, edge and line.
-  const EDGE_W = DRAW.width + 3;   // the edge of the opposite lightness is 3 wider than the line: 1.5 each side
-  const pad = EDGE_W / 2 + 2;
+  // what changed, and only inside the rectangle that changed (`dirty`); the strokes touching it are painted again whole. The pencil
+  // stroke being drawn is the exception: its new segments are only added on top (`drawn` counts those already on the canvas).
+  const pad = DRAW.width / 2 + 2;
   const bounds = (s) => s.tool === "pencil" ? s.box
     : { x1: Math.min(s.a.x, s.b.x), y1: Math.min(s.a.y, s.b.y), x2: Math.max(s.a.x, s.b.x), y2: Math.max(s.a.y, s.b.y) };
   const mark = (r) => {
@@ -157,7 +180,7 @@ export function createIsland(o) {
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
     const p = { x: e.clientX, y: e.clientY };
-    cur = { tool, color: ink, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, done: 0 };
+    cur = { tool, color: ink, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, done: 0, drawn: 0 };
     mark(bounds(cur));
     strokes.push(cur);
     schedule();
@@ -170,8 +193,9 @@ export function createIsland(o) {
     for (const m of points.length ? points : [e]) {
       const p = { x: m.clientX, y: m.clientY };
       if (s.tool === "pencil") {
-        // only the area of the new segment (with the previous point) is repainted: the stroke is painted whole inside it
-        mark({ x1: Math.min(s.b.x, p.x), y1: Math.min(s.b.y, p.y), x2: Math.max(s.b.x, p.x), y2: Math.max(s.b.y, p.y) });
+        // the area of the new segment (with the previous point) waits in `pend`: the frame adds the segment, or paints the stroke whole
+        const r = { x1: Math.min(s.b.x, p.x), y1: Math.min(s.b.y, p.y), x2: Math.max(s.b.x, p.x), y2: Math.max(s.b.y, p.y) };
+        s.pend = s.pend ? { x1: Math.min(s.pend.x1, r.x1), y1: Math.min(s.pend.y1, r.y1), x2: Math.max(s.pend.x2, r.x2), y2: Math.max(s.pend.y2, r.y2) } : r;
         s.segs.push({ x1: s.b.x, y1: s.b.y, x2: p.x, y2: p.y });
         s.box = { x1: Math.min(s.box.x1, p.x), y1: Math.min(s.box.y1, p.y), x2: Math.max(s.box.x2, p.x), y2: Math.max(s.box.y2, p.y) };
       }
@@ -190,24 +214,38 @@ export function createIsland(o) {
   canvas.addEventListener("pointerup", up);
   canvas.addEventListener("pointercancel", up);
 
-  // the stroke is painted twice over one path: first the wider edge, then the line in the picked colour as it is. One path for the
-  // whole pencil stroke: separate round-capped segments overlap and show as beads while the stroke fades
+  // the stroke is one path in the picked colour as it is, with no edge or shadow: one path for the whole pencil stroke, because
+  // separate round-capped segments overlap and show as beads while the stroke fades
   function paint(s, alpha) {
     g.globalAlpha = alpha;
     g.lineCap = g.lineJoin = "round";
+    g.lineWidth = DRAW.width;
+    g.strokeStyle = s.color;
     g.beginPath();
     if (s.tool === "pencil") {
       g.moveTo(s.segs[0].x1, s.segs[0].y1);
       for (const q of s.segs) g.lineTo(q.x2, q.y2);
+      s.drawn = s.segs.length;
+      s.pend = null;
     } else if (s.tool === "line") { g.moveTo(s.a.x, s.a.y); g.lineTo(s.b.x, s.b.y); }
     else if (s.tool === "rect") g.rect(Math.min(s.a.x, s.b.x), Math.min(s.a.y, s.b.y), Math.abs(s.b.x - s.a.x), Math.abs(s.b.y - s.a.y));
     else g.ellipse((s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2, Math.abs(s.b.x - s.a.x) / 2, Math.abs(s.b.y - s.a.y) / 2, 0, 0, 2 * Math.PI);
-    g.lineWidth = EDGE_W;
-    g.strokeStyle = edgeOf(s.color);
     g.stroke();
+  }
+
+  // the new segments of a pencil stroke on top of what is already there (a stroke that has not started to fade is opaque)
+  function extend(s) {
+    g.globalAlpha = 1;
+    g.lineCap = g.lineJoin = "round";
     g.lineWidth = DRAW.width;
     g.strokeStyle = s.color;
+    g.beginPath();
+    const from = Math.max(0, s.drawn - 1);
+    g.moveTo(s.segs[from].x1, s.segs[from].y1);
+    for (let i = from; i < s.segs.length; i++) g.lineTo(s.segs[i].x2, s.segs[i].y2);
     g.stroke();
+    s.drawn = s.segs.length;
+    s.pend = null;
   }
 
   // a finished stroke stays `hold` ms and fades out; a stroke being drawn is always whole. Nothing runs while strokes only wait:
@@ -224,6 +262,9 @@ export function createIsland(o) {
       if (age >= hold) { mark(bounds(s)); fading = true; } else next = Math.min(next, hold - age);
       return true;
     });
+    const open = strokes.filter((s) => s.pend);
+    if (dirty) for (const s of open) mark(s.pend);   // something else is repainted anyway: the stroke is painted whole with it
+    else for (const s of open) extend(s);
     if (dirty) {
       const x = Math.floor(dirty.x1) - 1, y = Math.floor(dirty.y1) - 1, w = Math.ceil(dirty.x2) + 1 - x, h = Math.ceil(dirty.y2) + 1 - y;
       dirty = null;
@@ -560,14 +601,27 @@ export function createIsland(o) {
   };
   const resize = () => { fit(); if (opened) { home(); if (pop) under(pop, true); if (cpop) under(cpop, true); if (toast) under(toast, true); } };
 
+  // Something is shown in the Fullscreen API: everything outside of it is inert, and the page under it is not drawn over. So the island
+  // and the canvas go inside the element that is fullscreen, and back to the page when it leaves. The whole page (<html>) needs nothing.
+  // video, iframe and the like cannot have children: there the island stays where it is (it cannot be shown over them).
+  const NO_CHILDREN = /^(video|audio|iframe|embed|object|img|canvas|input|textarea|select|br|hr)$/;
+  function mount() {
+    const fe = document.fullscreenElement;
+    const inside = fe && fe !== document.documentElement && !NO_CHILDREN.test(fe.localName) && fe.isConnected ? fe : null;
+    const [r, c] = inside ? [inside, inside] : [document.documentElement, document.body];
+    if (root.parentNode !== r) r.append(root);
+    if (canvas.parentNode !== c) c.append(canvas);
+  }
+  const screenChanged = () => { if (!opened) return; mount(); resize(); };
+
   function open() {
     if (opened) return;
     opened = true;
-    document.documentElement.append(root);
-    document.body.append(canvas);
+    mount();
     fit();
     home();
     addEventListener("resize", resize);
+    document.addEventListener("fullscreenchange", screenChanged);
     addEventListener("storage", follow);
     addEventListener("keydown", keys);
     document.addEventListener("pointerdown", away, true);
@@ -591,6 +645,7 @@ export function createIsland(o) {
     root.remove();
     canvas.remove();
     removeEventListener("resize", resize);
+    document.removeEventListener("fullscreenchange", screenChanged);
     removeEventListener("storage", follow);
     removeEventListener("keydown", keys);
     document.removeEventListener("pointerdown", away, true);
@@ -598,5 +653,5 @@ export function createIsland(o) {
   }
   function destroy() { close(); }
 
-  return { open, close, destroy, isOpen: () => opened, pick, box: root, canvas, strokes: () => strokes.length };
+  return { open, close, destroy, isOpen: () => opened, pick, recording, box: root, canvas, strokes: () => strokes.length };
 }

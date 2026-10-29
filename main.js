@@ -111,6 +111,8 @@ function paintAll() {
   // the hub page does not reload by itself while this mark stands: a recording is running or not delivered yet
   document.documentElement.toggleAttribute("data-hub-hold", !!R && R.phase !== "count");
   for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key);
+  // the island's stop button shows the same time as the hub's record button
+  R?.island?.recording(R.phase === "rec" ? clock(performance.now() - R.t0) : null);
 }
 
 function bin() {
@@ -270,7 +272,7 @@ function record() {
     el: hubRef.el, t,
     timecode: () => stamp(performance.now() - r.t0), gallery,
     onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
-    onToggle: () => paintAll(),
+    onToggle: () => paintAll(), onStop: () => stop(),
   });
   r.island.open();
   if (r.mic) {

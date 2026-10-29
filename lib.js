@@ -209,15 +209,6 @@ export function hsv2rgb(h, s, v) {
   const f = (n) => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
   return [f(5), f(3), f(1)];
 }
-// perceived lightness of a colour (OKLab L, 0..1): a dark stroke gets a light edge and the other way round
-export function okL(hex) {
-  const [r, g, b] = hex2rgb(hex).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  return 0.2104542553 * l + 0.793617785 * m - 0.0040720033 * s;
-}
-export const edgeOf = (ink) => (okL(ink) > 0.6 ? "rgb(0 0 0 / 0.45)" : "rgb(255 255 255 / 0.7)");
 export const fadeAlpha = (age, hold = DRAW.hold, fade = DRAW.fade) =>
   !hold || age <= hold ? 1 : age >= hold + fade ? 0 : 1 - (age - hold) / fade;
 

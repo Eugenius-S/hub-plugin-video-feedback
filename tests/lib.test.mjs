@@ -1,7 +1,7 @@
 // Video feedback logic without a browser: phrases by pauses, frames, the message text. Run: node --test tests/*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COLORS, DRAW, FRAMES, INK_KEY, VOICE, bundles, clock, count, edgeOf, fadeAlpha, fmtDuration, frameName, hex2rgb, hsv2rgb, inkColor, matchItem, okL, rgb2hex, rgb2hsv,
+import { COLORS, DRAW, FRAMES, INK_KEY, VOICE, bundles, clock, count, fadeAlpha, fmtDuration, frameName, hex2rgb, hsv2rgb, inkColor, matchItem, rgb2hex, rgb2hsv,
   mediaUrl, message, phrases, pick, sentSummary, stamp, zip } from "../lib.js";
 import { STR, tr } from "../strings.js";
 
@@ -299,8 +299,4 @@ test("the colour picker: ready colours, hex and hsv both ways, the edge of the o
   }
   assert.deepEqual(rgb2hsv([1, 0, 0]), [0, 1, 1]);
   assert.deepEqual(rgb2hsv([0, 0, 0]), [0, 0, 0]);
-  assert.ok(okL("#000000") < 0.01 && okL("#FFFFFF") > 0.99);
-  const dark = "rgb(255 255 255 / 0.7)", light = "rgb(0 0 0 / 0.45)";
-  for (const hex of ["#FF3B30", "#FF9500", "#FFD60A", "#34C759", "#0A84FF", "#FFFFFF"]) assert.equal(edgeOf(hex), light, `${hex} gets a dark edge`);
-  for (const hex of ["#1C1C1E", "#000000", "#7A1F1F"]) assert.equal(edgeOf(hex), dark, `${hex} gets a light edge`);
 });
