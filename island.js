@@ -1,20 +1,20 @@
 // The pen island: a small floating panel over the hub page while the screen is recorded. Pencil, rectangle, oval and line draw on
 // a transparent canvas over the page, so the strokes land in the recorded video and in the frames by themselves; the island is a
 // child of <html>, outside <body>, so the capture of the hub tab can leave it out (Element Capture, see confine() in main.js).
-// The ink adapts to what is under it: white by default, dark where the screen is light (the picture of the screen is read
-// when the pointer goes down, so the live stroke never feeds back into its own colour).
+// The ink is always white and the canvas blends with `difference` (an inverse of what lies under it), so a stroke reads on any
+// background without anyone measuring the screen.
 // A Motion Gallery button (only when that plugin answers) opens a popover with posters; a pick tags the animation at the
 // current moment of the video. The look follows the designer's mock-up (vfd-* classes in style.css, tokens of the hub theme).
-import { DRAW, count, fadeAlpha, fmtDuration, geometry, inkFor, matchItem, mediaUrl, meanLuma, outline, viewToFrame } from "./lib.js";
+import { DRAW, count, fadeAlpha, fmtDuration, matchItem, mediaUrl } from "./lib.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const POS = "hub-video-feedback:island";
 const EDGE = 8;        // the popover and the toast keep this far from the screen edge, and sit this far under the island
 const SHOWN = 60;      // cards drawn at once in the popover
 const TOOLS = ["pencil", "rect", "oval", "line"];
-// outline icons from the designer's mock-up (Icons8 and Material outlined), viewBox 0 0 24 24, currentColor
+// outline icons from the designer's mock-up (Icons8 and Material outlined; move is Material drag_indicator, six dots), viewBox 0 0 24 24, currentColor
 const ICONS = {
-  move: "M 12 2 L 8 6 L 11 6 L 11 11 L 6 11 L 6 8 L 2 12 L 6 16 L 6 13 L 11 13 L 11 18 L 8 18 L 12 22 L 16 18 L 13 18 L 13 13 L 18 13 L 18 16 L 22 12 L 18 8 L 18 11 L 13 11 L 13 6 L 16 6 L 12 2 z",
+  move: "M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z",
   pencil: "M 18.414062 2 C 18.158062 2 17.902031 2.0979687 17.707031 2.2929688 L 5 15 C 5 15 6.005 15.005 6.5 15.5 C 6.995 15.995 6.984375 16.984375 6.984375 16.984375 C 6.984375 16.984375 8.003 17.003 8.5 17.5 C 8.997 17.997 9 19 9 19 L 21.707031 6.2929688 C 22.098031 5.9019687 22.098031 5.2689063 21.707031 4.8789062 L 19.121094 2.2929688 C 18.926094 2.0979688 18.670063 2 18.414062 2 z M 18.414062 4.4140625 L 19.585938 5.5859375 L 18.537109 6.6347656 L 17.365234 5.4628906 L 18.414062 4.4140625 z M 15.951172 6.8769531 L 17.123047 8.0488281 L 9.4609375 15.710938 C 9.2099375 15.538938 8.9455469 15.408594 8.6855469 15.308594 C 8.5875469 15.050594 8.4590625 14.789063 8.2890625 14.539062 L 15.951172 6.8769531 z M 3.6699219 17 L 3 21 L 7 20.330078 L 3.6699219 17 z",
   rect: "M20,6v12H4V6H20 M22,4H2v16h20V4L22,4z",
   oval: "M 12 2 C 6.4889971 2 2 6.4889971 2 12 C 2 17.511003 6.4889971 22 12 22 C 17.511003 22 22 17.511003 22 12 C 22 6.4889971 17.511003 2 12 2 z M 12 4 C 16.430123 4 20 7.5698774 20 12 C 20 16.430123 16.430123 20 12 20 C 7.5698774 20 4 16.430123 4 12 C 4 7.5698774 7.5698774 4 12 4 z",
@@ -35,41 +35,12 @@ export function icon(name, small) {
   return s;
 }
 
-// the picture of the screen, small: where to look at the brightness under the pointer
-function sampler(track) {
-  let video = null, ready = null;
-  const c = document.createElement("canvas");
-  const g = c.getContext("2d", { willReadFrequently: true });
-  const start = () => {
-    if (!video && track) {
-      video = document.createElement("video");
-      video.muted = true;
-      video.srcObject = new MediaStream([track]);
-      ready = video.play().catch(() => {});
-    }
-    return ready;
-  };
-  return {
-    start,
-    snap() {
-      if (!video || video.readyState < 2 || !video.videoWidth) return null;
-      const k = Math.min(1, 640 / video.videoWidth);
-      c.width = Math.max(1, Math.round(video.videoWidth * k));
-      c.height = Math.max(1, Math.round(video.videoHeight * k));
-      g.drawImage(video, 0, 0, c.width, c.height);
-      try { return { data: g.getImageData(0, 0, c.width, c.height).data, w: c.width, h: c.height }; } catch { return null; }
-    },
-    stop() { video?.pause(); if (video) video.srcObject = null; video = null; },
-  };
-}
-
-// o: {el, t, track, kind, hold, toastMs, timecode: () => "01:24",
+// o: {el, t, hold, toastMs, timecode: () => "01:24",
 //     gallery: () => Promise<{items, base} | null>, onTag(item) => index, onUntag(index), onStroke(), onToggle(open)}
 export function createIsland(o) {
   const hold = o.hold ?? DRAW.hold;
   const toastMs = o.toastMs ?? 3000;
-  const eye = sampler(o.track);
-  let tool = null, strokes = [], cur = null, shot = null, raf = 0, gal = null, opened = false;
+  let tool = null, strokes = [], cur = null, raf = 0, gal = null, opened = false;
   let pop = null, find = null, grid = null, clockTimer = 0, toast = null, toastTimer = 0, retry = 0, tip = null;
 
   const root = o.el("div", "vfd-root");
@@ -81,7 +52,7 @@ export function createIsland(o) {
   const grip = o.el("div", "vfd-grip");
   grip.dataset.tip = o.t("draw_move");
   grip.setAttribute("aria-label", o.t("draw_grip"));
-  grip.append(icon("move", true));
+  grip.append(icon("move"));
   const btn = (label, name, small) => {
     const b = o.el("button", "vfd-btn");
     b.type = "button";
@@ -103,7 +74,7 @@ export function createIsland(o) {
   mg.setAttribute("aria-haspopup", "dialog");
   mg.setAttribute("aria-expanded", "false");
   sepMg.hidden = mg.hidden = true;   // only when Motion Gallery answers
-  const shut = btn(o.t("draw_close"), "close", true);
+  const shut = btn(o.t("draw_close"), "close");
   shut.dataset.act = "close";
   bar.append(grip, ...tools, sepMg, mg, o.el("span", "vfd-sep"), shut);
   mg.addEventListener("click", () => (pop ? closePop() : openPop()));
@@ -140,21 +111,7 @@ export function createIsland(o) {
     tool = id;
     for (const b of tools) b.setAttribute("aria-pressed", String(b.dataset.tool === id));
     canvas.classList.toggle("vf-on", !!id);   // no tool: the page under the canvas is clickable again
-    if (id) { eye.start(); closePop(); }
-  }
-
-  // ink for a point or for a shape: brightness under the pointer from the picture taken when the pointer went down
-  function inkAt(points) {
-    if (!shot) return inkFor(0);   // no picture of the screen: white
-    const geo = geometry(o.kind, { inner: { w: innerWidth, h: innerHeight }, outer: { w: outerWidth || innerWidth, h: outerHeight || innerHeight },
-      screen: { w: screen.width, h: screen.height }, pos: { x: screenX || 0, y: screenY || 0 } });
-    let sum = 0, n = 0;
-    for (const p of points) {
-      const f = viewToFrame(p, geo, shot);
-      const l = meanLuma(shot.data, shot.w, shot.h, f.x, f.y, 3);
-      if (l != null) { sum += l; n++; }
-    }
-    return inkFor(n ? sum / n : 0);
+    if (id) closePop();
   }
 
   const at = (e) => ({ x: e.clientX, y: e.clientY });
@@ -162,18 +119,15 @@ export function createIsland(o) {
     if (!tool || e.button) return;
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
-    shot = eye.snap();
     const p = at(e);
-    cur = { tool, a: p, b: p, color: inkAt([p]), segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y, c: inkAt([p]) }], done: 0 };
+    cur = { tool, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], done: 0 };
     strokes.push(cur);
     draw();
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!cur) return;
     const p = at(e);
-    if (cur.tool === "pencil") {
-      cur.segs.push({ x1: cur.b.x, y1: cur.b.y, x2: p.x, y2: p.y, c: inkAt([p]) });
-    } else cur.color = inkAt(outline(cur.tool, cur.a, p));
+    if (cur.tool === "pencil") cur.segs.push({ x1: cur.b.x, y1: cur.b.y, x2: p.x, y2: p.y });
     cur.b = p;
     draw();
   });
@@ -191,19 +145,15 @@ export function createIsland(o) {
     g.globalAlpha = alpha;
     g.lineWidth = DRAW.width;
     g.lineCap = g.lineJoin = "round";
+    g.strokeStyle = DRAW.ink;
     if (s.tool === "pencil") {
-      // one path per run of one colour: separate round-capped segments overlap and show as beads while the stroke fades
-      for (let i = 0; i < s.segs.length;) {
-        const c = s.segs[i].c;
-        g.strokeStyle = c;
-        g.beginPath();
-        g.moveTo(s.segs[i].x1, s.segs[i].y1);
-        for (; i < s.segs.length && s.segs[i].c === c; i++) g.lineTo(s.segs[i].x2, s.segs[i].y2);
-        g.stroke();
-      }
+      // one path for the whole stroke: separate round-capped segments overlap and show as beads while the stroke fades
+      g.beginPath();
+      g.moveTo(s.segs[0].x1, s.segs[0].y1);
+      for (const q of s.segs) g.lineTo(q.x2, q.y2);
+      g.stroke();
       return;
     }
-    g.strokeStyle = s.color;
     g.beginPath();
     if (s.tool === "line") { g.moveTo(s.a.x, s.a.y); g.lineTo(s.b.x, s.b.y); }
     else if (s.tool === "rect") g.rect(Math.min(s.a.x, s.b.x), Math.min(s.a.y, s.b.y), Math.abs(s.b.x - s.a.x), Math.abs(s.b.y - s.a.y));
@@ -363,6 +313,7 @@ export function createIsland(o) {
       if (!opened) return;
       gal = x?.items?.length ? x : null;
       sepMg.hidden = mg.hidden = !gal;
+      home();   // the bar got wider: centre it again (a remembered place stays)
       if (!gal) retry = setTimeout(ask, 15000);
     }).catch(() => { if (opened) retry = setTimeout(ask, 15000); });
   }
@@ -381,7 +332,6 @@ export function createIsland(o) {
     document.body.append(canvas);
     fit();
     home();
-    eye.start();
     addEventListener("resize", resize);
     addEventListener("keydown", keys);
     document.addEventListener("pointerdown", away, true);
@@ -405,7 +355,7 @@ export function createIsland(o) {
     document.removeEventListener("pointerdown", away, true);
     o.onToggle?.(false);
   }
-  function destroy() { close(); eye.stop(); }
+  function destroy() { close(); }
 
   return { open, close, destroy, isOpen: () => opened, pick, box: root, canvas, strokes: () => strokes.length };
 }

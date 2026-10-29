@@ -191,18 +191,25 @@ async function start(ctx, snap) {
 // of <html>, outside <body>, so it is on screen but not in the video and not in the frames (the strokes live on a canvas
 // inside <body> and are recorded). It works only when the picked surface is a tab (Chrome 132+): a whole screen or a window
 // has no such mechanism, there the island is recorded together with everything else. Returns whether the crop took hold.
+// The strokes blend with `difference`; inside the isolated body that needs a picture under them, and the page colour usually
+// belongs to the viewport (it moves there from <html> or <body>), so while the crop holds, both paint the same opaque colour.
+const clear = (c) => !c || c === "transparent" || /^rgba?\(.*,\s*0\)$|^rgb\(.*\/\s*0\)$/.test(c);
 async function confine(track, r) {
-  const was = document.body.style.isolation;
+  const body = document.body.style, html = document.documentElement.style;
+  const was = { iso: body.isolation, body: body.backgroundColor, html: html.backgroundColor };
+  const undo = () => { body.isolation = was.iso; body.backgroundColor = was.body; html.backgroundColor = was.html; };
   try {
     if (track.getSettings?.().displaySurface !== "browser") return false;
     const RT = globalThis.RestrictionTarget;
     if (!RT?.fromElement || !track.restrictTo) return false;
+    const paint = [document.body, document.documentElement].map((e) => getComputedStyle(e).backgroundColor).find((c) => !clear(c)) || "Canvas";
     // Element Capture needs the element to be its own stacking context, otherwise the track can stay blank
-    document.body.style.isolation = "isolate";
+    body.isolation = "isolate";
+    body.backgroundColor = html.backgroundColor = paint;
     await track.restrictTo(await RT.fromElement(document.body));
-    r.unconfine = () => { document.body.style.isolation = was; };
+    r.unconfine = undo;
     return true;
-  } catch { document.body.style.isolation = was; return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
+  } catch { undo(); return false; }   // an older browser, or the body does not cover the tab: not an error, the island is just visible in the video
 }
 
 // the Motion Gallery catalog: {items, base} or null when that plugin is not installed or not running (nothing to show then)
@@ -260,7 +267,7 @@ function record() {
   r.tags = [];          // animation tags: {slug, title, t, gone?}
   r.drew = false;
   r.island = createIsland({
-    el: hubRef.el, t, track: r.screen.getVideoTracks()[0], kind: r.screen.getVideoTracks()[0].getSettings?.().displaySurface,
+    el: hubRef.el, t,
     timecode: () => stamp(performance.now() - r.t0), gallery,
     onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
     onToggle: () => paintAll(),

@@ -5,6 +5,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
+import zlib from "node:zlib";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -336,28 +337,68 @@ async function drawTools() {
   } finally { b.close(); h.close(); }
 }
 
-// 7. the ink follows the screen: dark on the white half, white on the black half
+// a screenshot of the page as the user sees it -> {w, h, px(x, y)}: 8-bit PNG from Chrome (RGB or RGBA, no interlace)
+async function shot(b) {
+  const png = Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64");
+  let w = 0, h = 0, bpp = 4, idat = [];
+  for (let i = 8; i < png.length;) {
+    const len = png.readUInt32BE(i), type = png.toString("latin1", i + 4, i + 8), body = png.subarray(i + 8, i + 8 + len);
+    if (type === "IHDR") { w = body.readUInt32BE(0); h = body.readUInt32BE(4); bpp = body[9] === 6 ? 4 : 3; }
+    if (type === "IDAT") idat.push(body);
+    i += 12 + len;
+  }
+  const raw = zlib.inflateSync(Buffer.concat(idat)), row = w * bpp, out = Buffer.alloc(h * row);
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (row + 1)], src = raw.subarray(y * (row + 1) + 1, (y + 1) * (row + 1));
+    for (let x = 0; x < row; x++) {
+      const left = x >= bpp ? out[y * row + x - bpp] : 0, up = y ? out[(y - 1) * row + x] : 0, ul = x >= bpp && y ? out[(y - 1) * row + x - bpp] : 0;
+      const pa = Math.abs(up - ul), pb = Math.abs(left - ul), pc = Math.abs(left + up - 2 * ul);
+      const pred = f === 0 ? 0 : f === 1 ? left : f === 2 ? up : f === 3 ? (left + up) >> 1 : pa <= pb && pa <= pc ? left : pb <= pc ? up : ul;
+      out[y * row + x] = (src[x] + pred) & 255;
+    }
+  }
+  return { w, h, px: (x, y) => [...out.subarray(y * row + x * bpp, y * row + x * bpp + 3)] };
+}
+
+// 7. the ink is white and blends with `difference`: dark on the white half of the page, white on the black half; the same with the
+// crop of the tab, where the body is isolated and has to paint the page colour itself
 async function ink() {
-  const h = newHub();
-  await h.listen();
-  const b = await launch();
-  try {
-    await load(b, h, "?bg=split");
-    await view(b);
-    await island(b, 1.5);
-    await tool(b, "line");
-    await drag(b, [150, 300], [250, 300]);
-    const onWhite = await pixel(b, 200, 300);
-    await drag(b, [750, 300], [850, 300]);
-    const onBlack = await pixel(b, 800, 300);
-    check(onWhite[3] > 200 && onWhite[0] < 60 && onWhite[2] < 60, `on white the ink is dark (${onWhite})`);
-    check(onBlack[3] > 200 && onBlack[0] > 200 && onBlack[2] > 200, `on black the ink is white (${onBlack})`);
-    await tool(b, "pencil");
-    await drag(b, [150, 400], [850, 400]);
-    const left = await pixel(b, 200, 400);
-    const right = await pixel(b, 800, 400);
-    check(left[0] < 60 && right[0] > 200, `one pencil line changes colour with the screen under it (${left} → ${right})`);
-  } finally { b.close(); h.close(); }
+  for (const tab of [false, true]) {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, tab ? "?tab" : "");
+      await view(b);
+      await island(b, 1.5);
+      await b.ev(`document.body.insertAdjacentHTML("beforeend", '<div style="position:fixed;inset:0 50% 0 0;background:#fff"></div><div style="position:fixed;inset:0 0 0 50%;background:#000"></div>')`);
+      check(await b.ev("getComputedStyle(document.querySelector('.vf-draw')).mixBlendMode") === "difference", "the stroke canvas blends with difference");
+      await tool(b, "line");
+      await drag(b, [150, 300], [250, 300]);
+      await drag(b, [750, 300], [850, 300]);
+      await tool(b, "pencil");
+      await drag(b, [150, 400], [850, 400]);
+      const ctx = await pixel(b, 200, 300);
+      check(ctx[3] > 200 && ctx[0] > 240 && ctx[1] > 240 && ctx[2] > 240, `the ink itself is white (${ctx})`);
+      const s = await shot(b);
+      const tag = tab ? "tab" : "screen";
+      for (const [x, y, name] of [[200, 300, "line"], [200, 400, "pencil"]]) {
+        const p = s.px(x, y);
+        check(p[0] < 30 && p[1] < 30 && p[2] < 30, `${tag}: on the white half the ${name} shows dark (${p})`);
+      }
+      for (const [x, y, name] of [[800, 300, "line"], [800, 400, "pencil"]]) {
+        const p = s.px(x, y);
+        check(p[0] > 225 && p[1] > 225 && p[2] > 225, `${tag}: on the black half the ${name} shows white (${p})`);
+      }
+      const hb = await b.ev("document.documentElement.style.backgroundColor");
+      check(tab ? hb !== "" : hb === "", `${tag}: the page colour is ${tab ? "painted by <html> and <body> while the crop holds" : "left alone"} (${hb})`);
+      if (tab) {
+        await b.ev("window.__root.querySelector('.vf-btn').click()");
+        await until(async () => !(await phase(b)), "the recording stopped", 20000);
+        check(await b.ev("document.documentElement.style.backgroundColor + document.body.style.backgroundColor + document.body.style.isolation") === "", "after the stop the page styles are back");
+      }
+    } finally { b.close(); h.close(); }
+  }
 }
 
 // 8. close wipes the drawing and hides the island; the pen button next to the bin brings it back
@@ -383,6 +424,44 @@ async function closePen() {
     check(await b.ev("globalThis.__videoFeedback().island.isOpen()") === true, "the pen button brings the island back");
     check(await b.ev(`${pen}.hidden`) === true || await until(() => b.ev(`${pen}.hidden`), "the pen goes away again"), "no pen button while the island is open");
     check(await b.ev("globalThis.__videoFeedback().phase") === "rec", "the recording went on all along");
+  } finally { b.close(); h.close(); }
+}
+
+// 8b. the island comes back where it was left (also after a reload and after a small window), the tool is not remembered
+async function place() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b, 0.3);
+    const at = "(() => { const r = document.querySelector('.vfd-root'); return [r.offsetLeft, r.offsetTop]; })()";
+    const grip = "(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()";
+    const dots = await b.ev("document.querySelectorAll('.vfd-grip svg path').length === 1 && /^M11 18c/.test(document.querySelector('.vfd-grip svg path').getAttribute('d'))");
+    check(dots, "the grip is the six dots icon");
+    await drag(b, await b.ev(grip), [200, 450]);
+    const left = await b.ev(at);
+    check(left[1] > 300, `the island is dragged (${left})`);
+    await tool(b, "oval");
+    await b.ev("document.querySelector('.vfd-btn[data-act=close]').click()");
+    await b.ev("window.__root.querySelector('.vf-pen').click()");
+    check((await b.ev(at)).join() === left.join(), "closed and opened again: the same place");
+    check(await b.ev("document.querySelectorAll('.vfd-btn[aria-pressed=true]').length") === 0, "the tool is not remembered");
+    await view(b, 420, 300);
+    await sleep(300);
+    const small = await b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return [r.right <= innerWidth, r.bottom <= innerHeight, r.left >= 0, r.top >= 0]; })()");
+    check(small.every(Boolean), `a small window keeps the island on the screen (${small})`);
+    await view(b);
+    await sleep(300);
+    check((await b.ev(at)).join() === left.join(), "a big window again: back to the saved place");
+    await b.ev("window.__root.querySelector('.vf-btn').click()");   // stop and send, so the reload cuts nothing off
+    await until(() => h.sends.length, "the recording sent", 60000);
+    await until(async () => !(await phase(b)), "the recording stopped", 20000);
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b, 0.3);
+    check((await b.ev(at)).join() === left.join(), "after a reload of the page: the same place");
   } finally { b.close(); h.close(); }
 }
 
@@ -487,7 +566,7 @@ async function confine() {
 }
 
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, closePen, theme, tagMg, noGallery, confine };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, closePen, place, theme, tagMg, noGallery, confine };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

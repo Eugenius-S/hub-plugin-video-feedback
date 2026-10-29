@@ -182,64 +182,9 @@ export function message({ length, phrases: list, frames, voice, audio, cut, vide
 }
 
 // ───── drawing over the screen: the pen island ─────
-// How bright a pixel looks to the eye, 0 (black) .. 1 (white)
-export const luma = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-// the ink adapts to what is under it: white by default, dark on a light place
-export const INK = { light: "#ffffff", dark: "#18181b", edge: 0.6 };
-export const inkFor = (l) => (l > INK.edge ? INK.dark : INK.light);
-
-// mean brightness of the square [cx-rad, cx+rad] of an RGBA image (ImageData.data), null when the square is outside
-export function meanLuma(data, w, h, cx, cy, rad = 1) {
-  const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(w - 1, Math.ceil(cx + rad));
-  const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(h - 1, Math.ceil(cy + rad));
-  let sum = 0, n = 0;
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    const i = (y * w + x) * 4;
-    sum += luma(data[i], data[i + 1], data[i + 2]);
-    n++;
-  }
-  return n ? sum / n : null;
-}
-
-// where the page lies in the captured picture. m: {inner, outer, screen: {w, h}, pos: {x, y} (window on the screen)}.
-// A browser tab - the picture is the page itself; a window - the page is under the frame and the title; a monitor - the
-// window sits somewhere on the screen. Unknown surface: as a tab. Returns {surface: {w, h}, origin: {x, y}} in CSS pixels.
-export function geometry(kind, m) {
-  const side = Math.max(0, (m.outer.w - m.inner.w) / 2);
-  const top = Math.max(0, m.outer.h - m.inner.h - side);
-  if (kind === "window") return { surface: m.outer, origin: { x: side, y: top } };
-  if (kind === "monitor") return { surface: m.screen, origin: { x: m.pos.x + side, y: m.pos.y + top } };
-  return { surface: m.inner, origin: { x: 0, y: 0 } };
-}
-
-// a point of the page -> a point of the frame of the given size
-export const viewToFrame = (p, geo, frame) => ({
-  x: ((p.x + geo.origin.x) * frame.w) / geo.surface.w,
-  y: ((p.y + geo.origin.y) * frame.h) / geo.surface.h,
-});
-
-// points on the outline of a shape dragged from a to b: where to look at the background to pick one ink for it
-export function outline(tool, a, b, n = 8) {
-  if (tool === "pencil") return [a, b];
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const u = i / n;
-    if (tool === "line") pts.push({ x: a.x + (b.x - a.x) * (u + 0.5 / n), y: a.y + (b.y - a.y) * (u + 0.5 / n) });
-    else if (tool === "oval") {
-      const ang = u * 2 * Math.PI;
-      pts.push({ x: (a.x + b.x) / 2 + ((b.x - a.x) / 2) * Math.cos(ang), y: (a.y + b.y) / 2 + ((b.y - a.y) / 2) * Math.sin(ang) });
-    } else {   // rect: the perimeter by length
-      const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y), per = 2 * (w + h) || 1, d = u * per;
-      const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
-      pts.push(d < w ? { x: x0 + d, y: y0 } : d < w + h ? { x: x0 + w, y: y0 + d - w }
-        : d < 2 * w + h ? { x: x0 + w - (d - w - h), y: y0 + h } : { x: x0, y: y0 + h - (d - 2 * w - h) });
-    }
-  }
-  return pts;
-}
-
 // a stroke that is done stays HOLD ms fully visible, then fades out in FADE ms; hold 0 - it stays until it is erased
-export const DRAW = { hold: 5000, fade: 1200, width: 4 };
+// the ink is white: the canvas blends with `difference`, so it shows as an inverse of what lies under it
+export const DRAW = { hold: 5000, fade: 1200, width: 4, ink: "#ffffff" };
 export const fadeAlpha = (age, hold = DRAW.hold, fade = DRAW.fade) =>
   !hold || age <= hold ? 1 : age >= hold + fade ? 0 : 1 - (age - hold) / fade;
 

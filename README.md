@@ -14,7 +14,7 @@ Until the hub accepts the message, the phrases, frames, audio and screen video a
 
 ## Pen island and animation tags
 
-While you record, a small island sits at the top of the screen (drag it by the grip). It has a pencil, a line, a rectangle, an oval, a Motion Gallery button and "close". Pick a tool and draw straight on the screen: the strokes are in the video and fade out after a few seconds. Press the same tool again (or Escape) to put it down, and clicks go to the page again. The ink colour adapts by itself: white by default, dark where the screen is light. The island follows the hub theme (dark or light) and uses its icons. "Close" hides the island and clears the drawing; the pen button next to the bin brings it back.
+While you record, a small island sits at the top of the screen (drag it by the six-dot grip; it comes back where you left it). It has a pencil, a line, a rectangle, an oval, a Motion Gallery button and "close". Pick a tool and draw straight on the screen: the strokes are in the video and fade out after a few seconds. Press the same tool again (or Escape) to put it down, and clicks go to the page again. The ink is white and drawn with inversion (`mix-blend-mode: difference`), so it stays visible on light and on dark backgrounds. The island follows the hub theme (dark or light) and uses its icons. "Close" hides the island and clears the drawing; the pen button next to the bin brings it back.
 
 If the Motion Gallery plugin is installed and running, the island shows its button: search an animation, click it, and a tag is tied to that moment of the video. The session gets the tag with the timecode and a frame (`Animation tags: ...` in the message) and knows where to put that animation. "Undo" in the toast takes the tag back. The gallery is only read, and only from a local page (it is asked on the hub port + 12); nothing is sent anywhere.
 
@@ -42,6 +42,6 @@ The voice is recorded in pieces that are cut at pauses: when a phrase ends it go
 
 ## Tests
 
-`python3 -m unittest discover -s tests` - the manifest and the logic (`node --test`), with no hub and no browser; plus a recording in a real headless Chrome (a canvas instead of the screen, an oscillator instead of the microphone, a fake hub, a hub restart in the middle of an upload): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording|russian|drawTools|ink|closePen|theme|tagMg|noGallery|confine]`. Chrome comes from `VF_CHROME` or the usual places; without it the test is skipped. The e2e uses its own throwaway Chrome profile and a random debugging port.
+`python3 -m unittest discover -s tests` - the manifest and the logic (`node --test`), with no hub and no browser; plus a recording in a real headless Chrome (a canvas instead of the screen, an oscillator instead of the microphone, a fake hub, a hub restart in the middle of an upload): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording|russian|drawTools|ink|closePen|place|theme|tagMg|noGallery|confine]`. Chrome comes from `VF_CHROME` or the usual places; without it the test is skipped. The e2e uses its own throwaway Chrome profile and a random debugging port.
 
 Icon — [3D Fluency](https://icons8.com/icons/3d-fluency) by Icons8.

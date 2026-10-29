@@ -1,8 +1,8 @@
 // Video feedback logic without a browser: phrases by pauses, frames, the message text. Run: node --test tests/*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DRAW, FRAMES, INK, VOICE, bundles, clock, count, fadeAlpha, fmtDuration, frameName, geometry, inkFor, luma, matchItem,
-  mediaUrl, meanLuma, message, outline, phrases, pick, sentSummary, stamp, viewToFrame, zip } from "../lib.js";
+import { DRAW, FRAMES, VOICE, bundles, clock, count, fadeAlpha, fmtDuration, frameName, matchItem,
+  mediaUrl, message, phrases, pick, sentSummary, stamp, zip } from "../lib.js";
 import { STR, tr } from "../strings.js";
 
 // loudness over time: speech where [from, to)
@@ -219,54 +219,7 @@ test("the message to the session in Russian: the same format, the Russian text a
   }
 });
 
-// ───── pen island: ink colour, geometry, fading, Motion Gallery tags ─────
-test("the ink adapts: white by default, dark on a light place", () => {
-  assert.equal(luma(0, 0, 0), 0);
-  assert.ok(Math.abs(luma(255, 255, 255) - 1) < 1e-9);
-  assert.equal(inkFor(luma(0, 0, 0)), INK.light);
-  assert.equal(inkFor(luma(255, 255, 255)), INK.dark);
-  assert.equal(inkFor(luma(200, 200, 200)), INK.dark);    // light grey: dark ink
-  assert.equal(inkFor(luma(90, 90, 160)), INK.light);     // a dark blue: white ink
-});
-
-test("meanLuma averages a square of the picture and tells when the square is outside", () => {
-  const w = 4, h = 4, data = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0; i < w * h; i++) { const v = i % w < 2 ? 0 : 255; data.set([v, v, v, 255], i * 4); }   // left half black, right half white
-  assert.equal(meanLuma(data, w, h, 0.5, 1.5, 0.4), 0);
-  assert.ok(Math.abs(meanLuma(data, w, h, 3, 1, 0.4) - 1) < 1e-9);
-  const mid = meanLuma(data, w, h, 2, 2, 1);
-  assert.ok(mid > 0.3 && mid < 0.8, String(mid));
-  assert.equal(meanLuma(data, w, h, 100, 100, 1), null);
-});
-
-test("geometry: where the page lies in the captured picture", () => {
-  const m = { inner: { w: 1000, h: 600 }, outer: { w: 1016, h: 700 }, screen: { w: 1920, h: 1080 }, pos: { x: 100, y: 50 } };
-  assert.deepEqual(geometry("browser", m), { surface: m.inner, origin: { x: 0, y: 0 } });
-  assert.deepEqual(geometry(undefined, m), { surface: m.inner, origin: { x: 0, y: 0 } });   // unknown: as a tab
-  assert.deepEqual(geometry("window", m), { surface: m.outer, origin: { x: 8, y: 92 } });
-  assert.deepEqual(geometry("monitor", m), { surface: m.screen, origin: { x: 108, y: 142 } });
-  // a point of the page in the frame: the picture is twice as big as the page
-  assert.deepEqual(viewToFrame({ x: 10, y: 20 }, geometry("browser", m), { w: 2000, h: 1200 }), { x: 20, y: 40 });
-  const g = geometry("monitor", m);
-  assert.deepEqual(viewToFrame({ x: 0, y: 0 }, g, { w: 960, h: 540 }), { x: 54, y: 71 });
-});
-
-test("outline: points on the shape to look at the background", () => {
-  const a = { x: 0, y: 0 }, b = { x: 100, y: 50 };
-  assert.deepEqual(outline("pencil", a, b), [a, b]);
-  const line = outline("line", a, b, 4);
-  assert.equal(line.length, 4);
-  assert.deepEqual(line[0], { x: 12.5, y: 6.25 });
-  for (const tool of ["rect", "oval"]) {
-    const pts = outline(tool, a, b, 16);
-    assert.equal(pts.length, 16, tool);
-    for (const p of pts) assert.ok(p.x >= -1e-9 && p.x <= 100 + 1e-9 && p.y >= -1e-9 && p.y <= 50 + 1e-9, `${tool} ${p.x},${p.y}`);
-  }
-  // every point of a rectangle lies on its perimeter
-  for (const p of outline("rect", a, b, 16)) assert.ok(p.x === 0 || p.x === 100 || p.y === 0 || p.y === 50 || Math.abs(p.x % 1) < 1e-9, `${p.x},${p.y}`);
-  assert.equal(outline("rect", a, a, 4).length, 4);        // a zero-size drag does not break
-});
-
+// ───── pen island: fading, Motion Gallery tags ─────
 test("a finished stroke stays visible, then fades; hold 0 keeps it", () => {
   assert.equal(fadeAlpha(0), 1);
   assert.equal(fadeAlpha(DRAW.hold), 1);
