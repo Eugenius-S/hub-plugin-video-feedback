@@ -192,7 +192,15 @@ export function createIsland(o) {
     g.lineWidth = DRAW.width;
     g.lineCap = g.lineJoin = "round";
     if (s.tool === "pencil") {
-      for (const q of s.segs) { g.strokeStyle = q.c; g.beginPath(); g.moveTo(q.x1, q.y1); g.lineTo(q.x2, q.y2); g.stroke(); }
+      // one path per run of one colour: separate round-capped segments overlap and show as beads while the stroke fades
+      for (let i = 0; i < s.segs.length;) {
+        const c = s.segs[i].c;
+        g.strokeStyle = c;
+        g.beginPath();
+        g.moveTo(s.segs[i].x1, s.segs[i].y1);
+        for (; i < s.segs.length && s.segs[i].c === c; i++) g.lineTo(s.segs[i].x2, s.segs[i].y2);
+        g.stroke();
+      }
       return;
     }
     g.strokeStyle = s.color;
