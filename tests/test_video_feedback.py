@@ -73,6 +73,18 @@ class Source(unittest.TestCase):
         self.assertNotIn("memory: false", js)                          # video chunks pile up in memory, not only in IndexedDB
         self.assertIn("VIDEO_TRIES", js)                               # a hub refusal does not lose the video at once: the recording waits for the next visit
 
+    def test_pen_island_is_outside_the_recorded_body_and_the_gallery_is_only_read(self):
+        # the island sits outside <body> so a tab capture can crop it out of the video; Motion Gallery is only read, locally
+        main, isl = read("main.js"), read("island.js")
+        self.assertIn("RT.fromElement(document.body)", main)   # Element Capture: the island is not in the video
+        self.assertIn("documentElement.append(root)", isl)                    # a child of <html>, not of <body>
+        self.assertIn('hostname !== "localhost"', main)                       # the gallery is asked only from a local page
+        self.assertIn("/gallery.json", main)
+        self.assertNotIn("method:", main[main.index("async function gallery()"):main.index("async function gallery()") + 700])  # a plain GET
+        self.assertNotIn("innerHTML", isl)                                    # gallery titles go in as text, not markup
+        for call in ('o.t("draw_" + id)', 'o.t("draw_close")', 'o.t("tag_mg")', 'o.t("tag_search")'):
+            self.assertIn(call, isl)                                          # every island label goes through t()
+
     @unittest.skipUnless(shutil.which("node"), "needs node")
     def test_recording_in_headless_chrome(self):
         # a real recording: the video arrives as a file after a normal stop and when the hub restarted in the middle of an upload
@@ -83,7 +95,7 @@ class Source(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "needs node")
     def test_scripts_parse_and_logic_holds(self):
-        for name in ("main.js", "lib.js", "tick.js", "strings.js"):
+        for name in ("main.js", "lib.js", "island.js", "tick.js", "strings.js"):
             r = subprocess.run(["node", "--check", os.path.join(ROOT, name)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         r = subprocess.run(["node", "--test", os.path.join(ROOT, "tests", "lib.test.mjs")], capture_output=True, text=True)
@@ -111,7 +123,7 @@ class Languages(unittest.TestCase):
     """UI strings and the message to the session: en by default, ru for a Russian hub; picked at use time by hub.lang."""
 
     def test_russian_text_only_in_the_ru_table(self):
-        for name in ("main.js", "lib.js", "tick.js", "style.css", "README.md", "tests/e2e/harness.html"):
+        for name in ("main.js", "lib.js", "island.js", "tick.js", "style.css", "README.md", "tests/e2e/harness.html"):
             self.assertFalse(CYR.search(read(name)), name)
         js = read("strings.js")
         head, ru = js.split("\n  ru: {", 1)                           # everything before the ru table is English

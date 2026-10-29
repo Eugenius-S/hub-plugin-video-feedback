@@ -12,6 +12,14 @@ The screen video itself (250 kbit/s, 10 minutes is about 19 MB) always arrives t
 
 Until the hub accepts the message, the phrases, frames, audio and screen video are kept in the browser (IndexedDB of this tab, written to disk at once, so they survive even a power-off). If the hub restarted during sending, sending is retried for up to 5 minutes. If the page was reloaded or closed, after loading it sends the recording by itself when the same chat is opened; a recording cut off in the middle goes with its audio and screen video. The video is not lost when the hub restarts in the middle of an upload either: each part is retried until the hub accepts it; if the hub did not answer for longer than the retries, the recording stays in the browser and is sent on the next visit (after three such visits the message goes without the video). After delivery all of this is erased from the browser. While a recording or sending is in progress, the page does not reload itself for a new hub version, and leaving it makes the browser ask.
 
+## Pen island and animation tags
+
+While you record, a small island sits at the top of the screen (drag it by the grip). It has a pencil, a line, a rectangle, an oval, a Motion Gallery button and "close". Pick a tool and draw straight on the screen: the strokes are in the video and fade out after a few seconds. Press the same tool again (or Escape) to put it down, and clicks go to the page again. The ink colour adapts by itself: white by default, dark where the screen is light. The island follows the hub theme (dark or light) and uses its icons. "Close" hides the island and clears the drawing; the pen button next to the bin brings it back.
+
+If the Motion Gallery plugin is installed and running, the island shows its button: search an animation, click it, and a tag is tied to that moment of the video. The session gets the tag with the timecode and a frame (`Animation tags: ...` in the message) and knows where to put that animation. "Undo" in the toast takes the tag back. The gallery is only read, and only from a local page (it is asked on the hub port + 12); nothing is sent anywhere.
+
+Leaving the island out of the video works only when you share a browser tab (Element Capture, Chrome 132 or newer): the video is cropped to the page, and the island is not in it. If you share the whole screen or a window, the island is in the video together with everything else.
+
 ## Language
 
 The plugin's texts - the button hints, banners and the message sent to the session - are in English by default and in Russian when the hub language is Russian. The message keeps the same format in both languages (`[Image #N]` marks, timecodes, file paths and the `hub voice transcribe` command).
@@ -34,6 +42,6 @@ The voice is recorded in pieces that are cut at pauses: when a phrase ends it go
 
 ## Tests
 
-`python3 -m unittest discover -s tests` - the manifest and the logic (`node --test`), with no hub and no browser; plus a recording in a real headless Chrome (a canvas instead of the screen, an oscillator instead of the microphone, a fake hub, a hub restart in the middle of an upload): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording|russian]`. Chrome comes from `VF_CHROME` or the usual places; without it the test is skipped. The e2e uses its own throwaway Chrome profile and a random debugging port.
+`python3 -m unittest discover -s tests` - the manifest and the logic (`node --test`), with no hub and no browser; plus a recording in a real headless Chrome (a canvas instead of the screen, an oscillator instead of the microphone, a fake hub, a hub restart in the middle of an upload): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording|russian|drawTools|ink|closePen|theme|tagMg|noGallery|confine]`. Chrome comes from `VF_CHROME` or the usual places; without it the test is skipped. The e2e uses its own throwaway Chrome profile and a random debugging port.
 
 Icon — [3D Fluency](https://icons8.com/icons/3d-fluency) by Icons8.
