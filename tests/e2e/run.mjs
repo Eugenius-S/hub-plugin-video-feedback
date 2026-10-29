@@ -143,7 +143,12 @@ async function launch() {
   await new Promise((ok) => (browser.onopen = ok));
   let id = 0;
   const waiting = new Map();
-  browser.onmessage = (m) => { const j = JSON.parse(m.data); waiting.get(j.id)?.(j); };
+  // a reload after a trusted click would stop on the "leave the page?" dialog of a running recording: accept it
+  browser.onmessage = (m) => {
+    const j = JSON.parse(m.data);
+    waiting.get(j.id)?.(j);
+    if (j.method === "Page.javascriptDialogOpening") browser.send(JSON.stringify({ id: ++id, method: "Page.handleJavaScriptDialog", params: { accept: true }, sessionId: j.sessionId }));
+  };
   const send = (method, params = {}, sessionId) => new Promise((ok, bad) => {
     const n = ++id;
     waiting.set(n, (j) => (j.error ? bad(new Error(JSON.stringify(j.error))) : ok(j.result)));
@@ -362,8 +367,10 @@ async function shot(b) {
   return { w, h, px: (x, y) => [...out.subarray(y * row + x * bpp, y * row + x * bpp + 3)] };
 }
 
-// 7. the ink is white and blends with `difference`: dark on the white half of the page, white on the black half; the same with the
-// crop of the tab, where the body is isolated and has to paint the page colour itself
+// 7. the ink: one colour for every tool, drawn as it is (no blending), so it shows the same on a white, a light grey and a black
+// page; the same with the crop of the tab, where the body is isolated and has to paint the page colour itself
+const near = (p, c, d = 8) => p.every((v, i) => Math.abs(v - c[i]) <= d);
+const DEFAULT_INK = [255, 59, 48];
 async function ink() {
   for (const tab of [false, true]) {
     const h = newHub();
@@ -373,8 +380,8 @@ async function ink() {
       await load(b, h, tab ? "?tab" : "");
       await view(b);
       await island(b, 1.5);
-      await b.ev(`document.body.insertAdjacentHTML("beforeend", '<div style="position:fixed;inset:0 50% 0 0;background:#fff"></div><div style="position:fixed;inset:0 0 0 50%;background:#000"></div>')`);
-      check(await b.ev("getComputedStyle(document.querySelector('.vf-draw')).mixBlendMode") === "difference", "the stroke canvas blends with difference");
+      await b.ev(`document.body.insertAdjacentHTML("beforeend", '<div style="position:fixed;inset:0 66% 0 0;background:#fff"></div><div style="position:fixed;inset:0 33% 0 34%;background:#d9d9d9"></div><div style="position:fixed;inset:0 0 0 67%;background:#000"></div>')`);
+      check(await b.ev("getComputedStyle(document.querySelector('.vf-draw')).mixBlendMode") === "normal", "the stroke canvas does not blend");
       // a screen with a scale other than 100% (Windows 125%, retina): the canvas keeps the size of the viewport in CSS pixels
       await b.page("Emulation.setDeviceMetricsOverride", { width: 900, height: 600, deviceScaleFactor: 2, mobile: false });
       await sleep(300);
@@ -382,22 +389,17 @@ async function ink() {
       check(box[0] === box[2] && box[1] === box[3], `at scale 2 the stroke canvas is as big as the viewport (${box})`);
       await view(b);
       await sleep(300);
+      const spots = [[100, "white"], [500, "light grey"], [900, "black"]];
       await tool(b, "line");
-      await drag(b, [150, 300], [250, 300]);
-      await drag(b, [750, 300], [850, 300]);
+      for (const [x] of spots) await drag(b, [x - 50, 300], [x + 50, 300]);
       await tool(b, "pencil");
-      await drag(b, [150, 400], [850, 400]);
-      const ctx = await pixel(b, 200, 300);
-      check(ctx[3] > 200 && ctx[0] > 240 && ctx[1] > 240 && ctx[2] > 240, `the ink itself is white (${ctx})`);
-      const s = await shot(b);
+      for (const [x] of spots) await drag(b, [x - 50, 400], [x + 50, 400]);
       const tag = tab ? "tab" : "screen";
-      for (const [x, y, name] of [[200, 300, "line"], [200, 400, "pencil"]]) {
+      check(near(await pixel(b, 100, 300), [...DEFAULT_INK, 255], 2), "the default ink is a saturated red");
+      const s = await shot(b);
+      for (const [x, bg] of spots) for (const [y, name] of [[300, "line"], [400, "pencil"]]) {
         const p = s.px(x, y);
-        check(p[0] < 30 && p[1] < 30 && p[2] < 30, `${tag}: on the white half the ${name} shows dark (${p})`);
-      }
-      for (const [x, y, name] of [[800, 300, "line"], [800, 400, "pencil"]]) {
-        const p = s.px(x, y);
-        check(p[0] > 225 && p[1] > 225 && p[2] > 225, `${tag}: on the black half the ${name} shows white (${p})`);
+        check(near(p, DEFAULT_INK), `${tag}: on the ${bg} part the ${name} is the ink colour as it is (${p})`);
       }
       const hb = await b.ev("document.documentElement.style.backgroundColor");
       check(tab ? hb !== "" : hb === "", `${tag}: the page colour is ${tab ? "painted by <html> and <body> while the crop holds" : "left alone"} (${hb})`);
@@ -408,6 +410,112 @@ async function ink() {
       }
     } finally { b.close(); h.close(); }
   }
+}
+
+// 7b. the colour popover: a colour picked once goes to every tool, to the next stroke on the open canvas (earlier strokes keep
+// theirs), is remembered, and survives a reload; a broken stored value falls back to the default. The stroke has an edge of the
+// opposite lightness (dark round a light ink, light round a dark one), so it shows on any page
+async function inkPick() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  const KEY = "hub-video-feedback:ink";
+  const cur = () => b.ev("getComputedStyle(document.querySelector('.vfd-color')).getPropertyValue('--ink').trim().toLowerCase()");
+  const isOpen = () => b.ev("!!document.querySelector('.vfd-cpop')");
+  const toggle = () => b.ev("document.querySelector('.vfd-color').click()");
+  const typeHex = (hex) => b.ev(`(() => { const i = document.querySelector('.vfd-hex input'); i.value = "${hex}"; i.dispatchEvent(new Event("input", { bubbles: true })); return i.value; })()`);
+  const swatch = (hex) => b.ev(`document.querySelector('.vfd-sw[data-hex="${hex}"]').click()`);
+  const key = (k, code, vk) => b.page("Input.dispatchKeyEvent", { type: "keyDown", key: k, code, windowsVirtualKeyCode: vk });
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(`localStorage.setItem("${KEY}", "not a colour")`);
+    await island(b);
+    check(await b.ev("document.querySelectorAll('.vfd-btn[data-act=color]').length") === 1, "one colour button");
+    check(await b.ev("(() => { const a = document.querySelector('.vfd-btn[data-act=color]'), g = document.querySelector('.vfd-grip'), t = document.querySelector('.vfd-btn[data-tool]'); return !!(g.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(a.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING); })()"), "the colour button sits between the grip and the tools");
+    check(await cur() === "#ff3b30", "a broken stored value: the default colour");
+    check(!(await isOpen()), "the popover is closed at first");
+    await tool(b, "line");
+    await drag(b, [100, 300], [200, 300]);
+    check(near(await pixel(b, 150, 300), [...DEFAULT_INK, 255], 2), "the first stroke has the default colour");
+    // the edge of a light ink is dark: the row just outside the 4 px core
+    { const e = await pixelNow(b, 150, 302); check(e[0] === 0 && e[1] === 0 && e[2] === 0 && e[3] > 60 && e[3] < 200, `a light ink has a dark edge (${e})`); }
+    await toggle();
+    check(await isOpen(), "a click on the colour button opens the popover");
+    check(await b.ev("document.querySelector('.vfd-color').getAttribute('aria-expanded')") === "true", "aria-expanded is true");
+    check(await b.ev("document.querySelectorAll('.vfd-sw').length") === 8, "eight ready colours");
+    check(await b.ev("document.querySelector('.vfd-sw[aria-checked=true]').dataset.hex") === "#FF3B30", "the current colour is checked");
+    check(await b.ev("document.querySelector('.vfd-hex input').value") === "FF3B30", "the hex field shows the colour");
+    check(await b.ev("document.querySelector('.vfd-cpop').offsetWidth") === 304, "the popover is 304 px wide");
+    // the field takes a colour live and keeps the popover open
+    check(await typeHex("2A9D8F") === "2A9D8F", "the hex field takes a colour");
+    check(await cur() === "#2a9d8f", "the button shows the new colour");
+    check(await b.ev(`localStorage.getItem("${KEY}")`) === "#2A9D8F", "the colour is remembered");
+    check(await isOpen(), "typing a colour keeps the popover open");
+    await typeHex("zz");
+    check(await cur() === "#2a9d8f", "an invalid hex changes nothing");
+    // the earlier stroke keeps its colour (checked at once, before it fades)
+    check(near(await pixelNow(b, 150, 300), [...DEFAULT_INK, 255], 2), "the stroke drawn before keeps its colour");
+    await key("Escape", "Escape", 27);
+    check(!(await isOpen()), "Escape closes the popover");
+    check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === true, "the first Escape does not drop the tool");
+    const want = [0x2a, 0x9d, 0x8f, 255];
+    for (const [id, a, c] of [["pencil", [100, 400], [200, 400]], ["line", [100, 350], [200, 350]], ["rect", [100, 450], [200, 520]], ["oval", [300, 450], [400, 520]]]) {
+      await tool(b, id);
+      await drag(b, a, c);
+    }
+    check(near(await pixel(b, 150, 350), want, 2), "line: the new colour");
+    check(near(await pixel(b, 150, 400), want, 2), "pencil: the new colour");
+    check(near(await pixel(b, 100, 485), want, 2), "rectangle: the new colour");
+    check(near(await pixel(b, 300, 485), want, 2), "oval: the new colour");
+    // a ready colour sets the ink and closes the popover; a dark ink has a light edge
+    await toggle();
+    await swatch("#1C1C1E");
+    check(!(await isOpen()), "a ready colour closes the popover");
+    check(await cur() === "#1c1c1e", "a ready colour is taken");
+    await tool(b, "line");
+    await drag(b, [100, 560], [200, 560]);
+    check(near(await pixel(b, 150, 560), [0x1c, 0x1c, 0x1e, 255], 2), "the black swatch draws black");
+    { const e = await pixelNow(b, 150, 562); check(e[0] === 255 && e[1] === 255 && e[2] === 255 && e[3] > 100, `a dark ink has a light edge (${e})`); }
+    // the square and the strip: a drag sets a colour, the popover stays
+    await toggle();
+    const sv = await b.ev("(() => { const r = document.querySelector('.vfd-sv').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()");
+    await drag(b, [sv[0] + sv[2] * 0.2, sv[1] + sv[3] * 0.5], [sv[0] + sv[2] * 0.9, sv[1] + sv[3] * 0.1]);
+    check(await isOpen(), "a drag on the square keeps the popover open");
+    const c1 = await cur();
+    check(/^#[0-9a-f]{6}$/.test(c1) && c1 !== "#1c1c1e", `the square sets a colour (${c1})`);
+    check(await b.ev("document.querySelector('.vfd-hex input').value.toLowerCase()") === c1.slice(1), "the hex field follows the square");
+    const hu = await b.ev("(() => { const r = document.querySelector('.vfd-hue').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()");
+    await drag(b, [hu[0] + 2, hu[1] + hu[3] / 2], [hu[0] + hu[2] * 0.5, hu[1] + hu[3] / 2]);
+    check(await cur() !== c1, "the strip changes the hue");
+    // keys: arrows move over the ready colours and apply them
+    await b.ev("document.querySelector('.vfd-sw').focus()");
+    await key("ArrowRight", "ArrowRight", 39);
+    check(await cur() === "#ff9500", "an arrow picks the next ready colour");
+    await key("Escape", "Escape", 27);
+    check(await b.ev("document.activeElement === document.querySelector('.vfd-color')"), "after Escape the focus is back on the colour button");
+    // a click outside closes the popover
+    await toggle();
+    await b.page("Input.dispatchMouseEvent", { type: "mousePressed", x: 500, y: 650, button: "left", buttons: 1, clickCount: 1 });
+    await b.page("Input.dispatchMouseEvent", { type: "mouseReleased", x: 500, y: 650, button: "left", buttons: 0, clickCount: 1 });
+    check(!(await isOpen()), "a click outside closes the popover");
+    // another window of the hub picked a colour: the open canvas follows, an open popover too
+    await toggle();
+    await b.ev(`dispatchEvent(new StorageEvent("storage", { key: "${KEY}", newValue: "#123456" }))`);
+    check(await cur() === "#123456", "a colour picked in another window is taken");
+    check(await b.ev("document.querySelector('.vfd-hex input').value") === "123456", "an open popover follows it");
+    await b.ev(`dispatchEvent(new StorageEvent("storage", { key: "${KEY}", newValue: "red; x" }))`);
+    check(await cur() === "#123456", "a broken value from another window is ignored");
+    await typeHex("2A9D8F");
+    // after a reload the choice is still there
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    check(await cur() === "#2a9d8f", "after a reload the colour is the chosen one");
+    await tool(b, "pencil");
+    await drag(b, [100, 300], [200, 300]);
+    check(near(await pixel(b, 150, 300), want, 2), "after a reload strokes use the chosen colour");
+  } finally { b.close(); h.close(); }
 }
 
 // 8. stop while the crop of the tab is still being set up (the countdown): the page colours and isolation are put back
@@ -701,12 +809,63 @@ async function smooth() {
   } finally { b.close(); h.close(); }
 }
 
+// snapshots for a review (not part of the default run): the island closed and with the colour popover open, strokes of
+// every tool in several inks on a white, a light grey and a black page, in the light and the dark theme; VF_SHOTS = the folder
+async function shots() {
+  const dir = process.env.VF_SHOTS;
+  if (!dir) throw new Error("VF_SHOTS is not set");
+  fs.mkdirSync(dir, { recursive: true });
+  const save = async (b, name) => fs.writeFileSync(`${dir}/${name}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
+  for (const th of ["light", "dark"]) {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, `?theme=${th}&bg=light`);
+      await view(b, 1000, 700);
+      await b.ev("localStorage.removeItem('hub-video-feedback:ink')");
+      await island(b, 0.6);
+      await b.ev("(() => { const t = performance.now(); performance.now = () => t; })()");   // strokes do not fade while the shots are taken
+      await b.ev("document.documentElement.style.background = document.body.style.background = '#fff'");
+      await save(b, `${th}-1-closed`);
+      await b.ev("document.querySelector('.vfd-color').click()");
+      await sleep(500);
+      await save(b, `${th}-2-popover`);
+      await b.ev("document.querySelector('.vfd-color').click()");
+      await sleep(300);
+      const ink = (hex) => b.ev(`(() => { const i = (document.querySelector('.vfd-color').click(), document.querySelector('.vfd-hex input')); i.value = "${hex}"; i.dispatchEvent(new Event("input", { bubbles: true })); document.querySelector('.vfd-color').click(); })()`);
+      for (const [bgName, bg] of [["white", "#ffffff"], ["grey", "#d9d9d9"], ["black", "#000000"]]) {
+        await b.ev(`document.documentElement.style.background = document.body.style.background = "${bg}"`);
+        // one row per ink: red (default), yellow, blue, black, white; each row draws pencil, line, rectangle, oval
+        let row = 0;
+        for (const hex of ["FF3B30", "FFD60A", "0A84FF", "1C1C1E", "FFFFFF"]) {
+          await ink(hex);
+          await sleep(200);
+          const y = 180 + row * 90;
+          await tool(b, "pencil");
+          await drag(b, [120, y + 30], [260, y]);
+          await tool(b, "line");
+          await drag(b, [300, y + 30], [440, y]);
+          await tool(b, "rect");
+          await drag(b, [480, y - 20], [600, y + 40]);
+          await tool(b, "oval");
+          await drag(b, [640, y - 20], [760, y + 40]);
+          row++;
+        }
+        await save(b, `${th}-3-strokes-${bgName}`);
+        await b.ev("document.querySelector('.vfd-btn[data-act=clear], .vfd-btn[data-act=undo]')?.click()");
+        await sleep(100);
+      }
+    } finally { b.close(); h.close(); }
+  }
+}
+
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, smooth };
+const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
-  if (!only && name === "smooth") continue;   // a measurement, run on request
+  if (!only && (name === "smooth" || name === "shots")) continue;   // a measurement, run on request
   console.log(`- ${name}`);
   try { await fn(); } catch (e) { failed++; console.log(`FAIL ${name}: ${e.message}`); }
 }

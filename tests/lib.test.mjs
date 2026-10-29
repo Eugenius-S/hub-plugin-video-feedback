@@ -1,7 +1,7 @@
 // Video feedback logic without a browser: phrases by pauses, frames, the message text. Run: node --test tests/*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DRAW, FRAMES, VOICE, bundles, clock, count, fadeAlpha, fmtDuration, frameName, matchItem,
+import { COLORS, DRAW, FRAMES, INK_KEY, VOICE, bundles, clock, count, edgeOf, fadeAlpha, fmtDuration, frameName, hex2rgb, hsv2rgb, inkColor, matchItem, okL, rgb2hex, rgb2hsv,
   mediaUrl, message, phrases, pick, sentSummary, stamp, zip } from "../lib.js";
 import { STR, tr } from "../strings.js";
 
@@ -229,6 +229,14 @@ test("a finished stroke stays visible, then fades; hold 0 keeps it", () => {
   assert.equal(fadeAlpha(1e9, 0), 1);
 });
 
+test("the ink colour: a hex colour is taken, anything else is refused", () => {
+  assert.equal(inkColor("#2A9D8F"), "#2a9d8f");
+  assert.equal(inkColor(" #f0a "), "#ff00aa");
+  for (const bad of [null, undefined, "", "red", "#12", "#12345", "#1234567", "#ggg", "#fff; x", 255, {}]) assert.equal(inkColor(bad), null, String(bad));
+  assert.equal(inkColor(DRAW.ink), DRAW.ink);
+  assert.match(INK_KEY, /^hub-video-feedback:/);
+});
+
 test("Motion Gallery: poster address, duration, search", () => {
   assert.equal(mediaUrl("http://localhost:8799", "/media/a.png"), "http://localhost:8799/media/a.png");
   assert.equal(mediaUrl("http://localhost:8799", "https://cdn.x/a.png"), "https://cdn.x/a.png");
@@ -280,4 +288,19 @@ test("message: animation tags and drawing are told to the session, an undone tag
   assert.ok(!/Animation tags|I drew on the screen/.test(plain), "no tags and no drawing: nothing extra");
   const onlyGone = message({ length: 5000, voice: true, frames: [], tags: [{ slug: "a", t: 1, gone: true }], phrases: [], lang: "en" });
   assert.ok(!onlyGone.includes("Animation tags"), "only undone tags: no note");
+});
+
+test("the colour picker: ready colours, hex and hsv both ways, the edge of the opposite lightness", () => {
+  assert.equal(COLORS.length, 8);
+  assert.equal(COLORS[0][1].toUpperCase(), DRAW.ink.toUpperCase(), "the first ready colour is the default ink");
+  for (const [, hex] of COLORS) {
+    assert.equal(inkColor(hex), hex.toLowerCase());
+    assert.equal(rgb2hex(...hsv2rgb(...rgb2hsv(hex2rgb(hex)))), hex.toUpperCase(), `${hex} survives hex -> hsv -> hex`);
+  }
+  assert.deepEqual(rgb2hsv([1, 0, 0]), [0, 1, 1]);
+  assert.deepEqual(rgb2hsv([0, 0, 0]), [0, 0, 0]);
+  assert.ok(okL("#000000") < 0.01 && okL("#FFFFFF") > 0.99);
+  const dark = "rgb(255 255 255 / 0.7)", light = "rgb(0 0 0 / 0.45)";
+  for (const hex of ["#FF3B30", "#FF9500", "#FFD60A", "#34C759", "#0A84FF", "#FFFFFF"]) assert.equal(edgeOf(hex), light, `${hex} gets a dark edge`);
+  for (const hex of ["#1C1C1E", "#000000", "#7A1F1F"]) assert.equal(edgeOf(hex), dark, `${hex} gets a light edge`);
 });

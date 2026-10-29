@@ -19,7 +19,7 @@
 .vfd-root { position: fixed; top: 0; left: 0; z-index: 2147483000; width: max-content; will-change: transform; font-family: var(--font-ui, inherit); }   /* the place is a transform, set by island.js */
 .vfd-root, .vfd-root *, .vfd-root ::before, .vfd-root ::after { box-sizing: border-box; }
 .vfd-root[hidden], .vfd-root [hidden] { display: none !important; }
-.vf-draw { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2147482990; pointer-events: none; mix-blend-mode: difference; }   /* white ink: an inverse of what lies under it */
+.vf-draw { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2147482990; pointer-events: none; }
 .vf-draw.vf-on { pointer-events: auto; cursor: crosshair; touch-action: none; }
 .vfd-i { width: 20px; height: 20px; fill: currentColor; flex: none; }
 .vfd-i16 { width: 16px; height: 16px; }
@@ -54,6 +54,12 @@
 .vfd-btn:active { transform: scale(0.97); transition: transform var(--dur-fast) var(--ease-out); }
 .vfd-btn[aria-pressed="true"], .vfd-btn[aria-expanded="true"] { background: var(--front-soft); color: var(--primary); }
 .vfd-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+/* pen colour: a round swatch after the grip; the ink goes to every tool (the designer's mock-up) */
+.vfd-color .vfd-dot {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--ink); box-shadow: inset 0 0 0 1px var(--outline-image);
+}
+.vfd-color[aria-expanded="true"] .vfd-tip { display: none; }
 .vfd-sep { width: 1px; height: 20px; background: var(--border); margin: 0 var(--space-1); flex: none; }
 @media (hover: hover) and (pointer: fine) {
   .vfd-btn:not([aria-pressed="true"]):not([aria-expanded="true"]):hover { background: var(--accent); color: var(--foreground); }
@@ -126,3 +132,49 @@
   border-radius: calc(var(--radius-lg) - var(--space-1)); font: 500 var(--text-sm)/1 var(--font-ui);
 }
 .vfd-toast-undo:hover { background: var(--accent); }
+
+/* colour popover: under the island at its left edge, 8 below it */
+.vfd-cpop {
+  position: absolute; top: calc(100% + var(--space-2)); left: 0;
+  width: 304px; padding: var(--space-3);
+  display: flex; flex-direction: column; gap: var(--space-3);
+  background: var(--card); color: var(--foreground);
+  border-radius: var(--radius-xl); box-shadow: var(--shadow-lift);
+  font-family: var(--font-ui);
+  animation: vfd-in var(--dur-fast) var(--ease-out) both; transform-origin: 26px 0;
+}
+.vfd-swatches { display: grid; grid-template-columns: repeat(8, 28px); justify-content: space-between; }
+.vfd-sw {
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  background: var(--c); box-shadow: inset 0 0 0 1px var(--outline-image);
+  transition: transform var(--dur-hover) ease;
+}
+.vfd-sw[aria-checked="true"] { box-shadow: inset 0 0 0 1px var(--outline-image), 0 0 0 2px var(--card), 0 0 0 4px var(--foreground); }
+.vfd-sw:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; }
+@media (hover: hover) and (pointer: fine) { .vfd-sw:hover { transform: scale(1.08); } }
+.vfd-pick { display: flex; flex-direction: column; gap: var(--space-2); }
+.vfd-sv {
+  position: relative; height: 128px; border-radius: calc(var(--radius-xl) - var(--space-3)); cursor: crosshair; touch-action: none;
+  background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(var(--h) 100% 50%));
+  box-shadow: inset 0 0 0 1px var(--outline-image);
+}
+.vfd-hue {
+  position: relative; height: 12px; border-radius: var(--radius-pill); cursor: pointer; touch-action: none;
+  background: linear-gradient(to right, #f00, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00);
+}
+.vfd-thumb {
+  position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; pointer-events: none;
+  background: var(--c); box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgb(0 0 0 / 0.25), 0 1px 3px rgb(0 0 0 / 0.3);
+}
+.vfd-hue .vfd-thumb { top: 50%; }
+.vfd-sv:focus-visible, .vfd-hue:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.vfd-hex {
+  display: flex; align-items: center; gap: var(--space-2);
+  height: 32px; padding: 0 var(--space-2);
+  background: var(--muted); border-radius: calc(var(--radius-xl) - var(--space-3));
+  color: var(--muted-foreground); font: 400 var(--text-sm)/1 var(--font-code);
+}
+.vfd-hex .vfd-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--ink); box-shadow: inset 0 0 0 1px var(--outline-image); flex: none; }
+.vfd-hex input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: none; color: var(--foreground); font: inherit; text-transform: uppercase; }
+.vfd-hex:focus-within { box-shadow: 0 0 0 2px var(--ring); }
+@media (prefers-reduced-motion: reduce) { .vfd-cpop { animation-name: vfd-fade; } .vfd-sw { transition: none; } }

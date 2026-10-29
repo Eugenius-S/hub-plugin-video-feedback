@@ -1,11 +1,12 @@
 // The pen island: a small floating panel over the hub page while the screen is recorded. Pencil, rectangle, oval and line draw on
 // a transparent canvas over the page, so the strokes land in the recorded video and in the frames by themselves; the island is a
 // child of <html>, outside <body>, so the capture of the hub tab can leave it out (Element Capture, see confine() in main.js).
-// The ink is always white and the canvas blends with `difference` (an inverse of what lies under it), so a stroke reads on any
-// background without anyone measuring the screen.
+// One ink colour serves every tool: a round button next to the grip opens the colour popover (8 ready colours, a square, a hue
+// strip, hex), the choice is remembered (localStorage) and applies to the next stroke on the open canvas. A stroke is drawn in
+// that colour as it is, no blending, with a thin edge of the opposite lightness so it reads on any background.
 // A Motion Gallery button (only when that plugin answers) opens a popover with posters; a pick tags the animation at the
 // current moment of the video. The look follows the designer's mock-up (vfd-* classes in style.css, tokens of the hub theme).
-import { DRAW, count, fadeAlpha, fmtDuration, matchItem, mediaUrl } from "./lib.js";
+import { COLORS, DRAW, INK_KEY, count, edgeOf, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb, inkColor, matchItem, mediaUrl, rgb2hex, rgb2hsv } from "./lib.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const POS = "hub-video-feedback:island";
@@ -42,7 +43,10 @@ export function createIsland(o) {
   const toastMs = o.toastMs ?? 3000;
   let tool = null, strokes = [], cur = null, gal = null, opened = false;
   let dirty = null, frameId = 0, wake = 0, pos = { x: 0, y: 0 };   // the area to repaint, the pending frame and fade timer, the island's place
+  let ink = DRAW.ink;
+  try { ink = inkColor(localStorage.getItem(INK_KEY)) || ink; } catch { /* no storage */ }
   let pop = null, find = null, grid = null, clockTimer = 0, toast = null, toastTimer = 0, retry = 0, tip = null;
+  let cpop = null, cpaint = null;   // the colour popover, and its repaint from a colour that came from outside
 
   const root = o.el("div", "vfd-root");
   const bar = o.el("div", "vfd-island");
@@ -69,6 +73,25 @@ export function createIsland(o) {
     b.addEventListener("click", () => pick(tool === id ? null : id));
     return b;
   });
+  // the colour button: a round dot of the current ink, right after the grip; it opens the colour popover
+  const swatch = o.el("button", "vfd-btn vfd-color");
+  swatch.type = "button";
+  swatch.dataset.tip = o.t("draw_color");
+  swatch.dataset.act = "color";
+  swatch.setAttribute("aria-haspopup", "dialog");
+  swatch.setAttribute("aria-expanded", "false");
+  swatch.append(o.el("span", "vfd-dot"));
+  const nameOf = (hex) => o.t("color_" + (COLORS.find(([, h]) => h === hex.toUpperCase())?.[0] ?? "custom"));
+  const setInk = (c, save) => {
+    ink = c;
+    swatch.style.setProperty("--ink", c);
+    swatch.setAttribute("aria-label", o.t("draw_color_now", { name: nameOf(c) }));
+    if (save) { try { localStorage.setItem(INK_KEY, c); } catch { /* no storage */ } }
+  };
+  setInk(ink);
+  swatch.addEventListener("click", () => (cpop ? closeColor() : openColor()));
+  // another tab or window of the hub picked a colour: this canvas follows, an open popover too
+  const follow = (e) => { const c = e.key === INK_KEY ? inkColor(e.newValue) : null; if (c) { setInk(c); cpaint?.(c.toUpperCase(), false, true); } };
   const sepMg = o.el("span", "vfd-sep");
   const mg = btn(o.t("tag_mg"), "mg");
   mg.dataset.act = "mg";
@@ -77,7 +100,7 @@ export function createIsland(o) {
   sepMg.hidden = mg.hidden = true;   // only when Motion Gallery answers
   const shut = btn(o.t("draw_close"), "close");
   shut.dataset.act = "close";
-  bar.append(grip, ...tools, sepMg, mg, o.el("span", "vfd-sep"), shut);
+  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, o.el("span", "vfd-sep"), shut);
   mg.addEventListener("click", () => (pop ? closePop() : openPop()));
   shut.addEventListener("click", () => close());
 
@@ -114,12 +137,13 @@ export function createIsland(o) {
     tool = id;
     for (const b of tools) b.setAttribute("aria-pressed", String(b.dataset.tool === id));
     canvas.classList.toggle("vf-on", !!id);   // no tool: the page under the canvas is clickable again
-    if (id) closePop();
+    if (id) { closePop(); closeColor(); }
   }
 
   // Drawing stays off the pointer handlers: they only record points (no layout reads, no painting); one animation frame paints
-  // what changed, and only inside the rectangle that changed (`dirty`). A pencil stroke being drawn adds only its new segments.
-  const pad = DRAW.width / 2 + 2;
+  // what changed, and only inside the rectangle that changed (`dirty`); the strokes touching it are painted again whole, edge and line.
+  const EDGE_W = DRAW.width + 3;   // the edge of the opposite lightness is 3 wider than the line: 1.5 each side
+  const pad = EDGE_W / 2 + 2;
   const bounds = (s) => s.tool === "pencil" ? s.box
     : { x1: Math.min(s.a.x, s.b.x), y1: Math.min(s.a.y, s.b.y), x2: Math.max(s.a.x, s.b.x), y2: Math.max(s.a.y, s.b.y) };
   const mark = (r) => {
@@ -133,7 +157,8 @@ export function createIsland(o) {
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
     const p = { x: e.clientX, y: e.clientY };
-    cur = { tool, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, drawn: 0, done: 0 };
+    cur = { tool, color: ink, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, done: 0 };
+    mark(bounds(cur));
     strokes.push(cur);
     schedule();
   });
@@ -145,6 +170,8 @@ export function createIsland(o) {
     for (const m of points.length ? points : [e]) {
       const p = { x: m.clientX, y: m.clientY };
       if (s.tool === "pencil") {
+        // only the area of the new segment (with the previous point) is repainted: the stroke is painted whole inside it
+        mark({ x1: Math.min(s.b.x, p.x), y1: Math.min(s.b.y, p.y), x2: Math.max(s.b.x, p.x), y2: Math.max(s.b.y, p.y) });
         s.segs.push({ x1: s.b.x, y1: s.b.y, x2: p.x, y2: p.y });
         s.box = { x1: Math.min(s.box.x1, p.x), y1: Math.min(s.box.y1, p.y), x2: Math.max(s.box.x2, p.x), y2: Math.max(s.box.y2, p.y) };
       }
@@ -155,7 +182,6 @@ export function createIsland(o) {
   });
   const up = () => {
     if (!cur) return;
-    if (cur.drawn < cur.segs.length) mark(bounds(cur));   // the tail not yet painted is painted with the fade alpha on the next frame
     cur.done = performance.now();
     cur = null;
     o.onStroke?.();
@@ -164,23 +190,23 @@ export function createIsland(o) {
   canvas.addEventListener("pointerup", up);
   canvas.addEventListener("pointercancel", up);
 
+  // the stroke is painted twice over one path: first the wider edge, then the line in the picked colour as it is. One path for the
+  // whole pencil stroke: separate round-capped segments overlap and show as beads while the stroke fades
   function paint(s, alpha) {
     g.globalAlpha = alpha;
-    g.lineWidth = DRAW.width;
     g.lineCap = g.lineJoin = "round";
-    g.strokeStyle = DRAW.ink;
+    g.beginPath();
     if (s.tool === "pencil") {
-      // one path for the whole stroke: separate round-capped segments overlap and show as beads while the stroke fades
-      g.beginPath();
       g.moveTo(s.segs[0].x1, s.segs[0].y1);
       for (const q of s.segs) g.lineTo(q.x2, q.y2);
-      g.stroke();
-      return;
-    }
-    g.beginPath();
-    if (s.tool === "line") { g.moveTo(s.a.x, s.a.y); g.lineTo(s.b.x, s.b.y); }
+    } else if (s.tool === "line") { g.moveTo(s.a.x, s.a.y); g.lineTo(s.b.x, s.b.y); }
     else if (s.tool === "rect") g.rect(Math.min(s.a.x, s.b.x), Math.min(s.a.y, s.b.y), Math.abs(s.b.x - s.a.x), Math.abs(s.b.y - s.a.y));
     else g.ellipse((s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2, Math.abs(s.b.x - s.a.x) / 2, Math.abs(s.b.y - s.a.y) / 2, 0, 0, 2 * Math.PI);
+    g.lineWidth = EDGE_W;
+    g.strokeStyle = edgeOf(s.color);
+    g.stroke();
+    g.lineWidth = DRAW.width;
+    g.strokeStyle = s.color;
     g.stroke();
   }
 
@@ -198,18 +224,6 @@ export function createIsland(o) {
       if (age >= hold) { mark(bounds(s)); fading = true; } else next = Math.min(next, hold - age);
       return true;
     });
-    g.globalAlpha = 1;
-    for (const s of strokes) {
-      if (s.tool !== "pencil" || s.done || s.drawn >= s.segs.length) continue;
-      g.lineWidth = DRAW.width;
-      g.lineCap = g.lineJoin = "round";
-      g.strokeStyle = DRAW.ink;
-      g.beginPath();
-      g.moveTo(s.segs[s.drawn].x1, s.segs[s.drawn].y1);
-      for (let i = s.drawn; i < s.segs.length; i++) g.lineTo(s.segs[i].x2, s.segs[i].y2);
-      g.stroke();
-      s.drawn = s.segs.length;
-    }
     if (dirty) {
       const x = Math.floor(dirty.x1) - 1, y = Math.floor(dirty.y1) - 1, w = Math.ceil(dirty.x2) + 1 - x, h = Math.ceil(dirty.y2) + 1 - y;
       dirty = null;
@@ -222,7 +236,6 @@ export function createIsland(o) {
         const b = bounds(s);
         if (b.x2 + pad < x || b.x1 - pad > x + w || b.y2 + pad < y || b.y1 - pad > y + h) continue;
         paint(s, s.done ? fadeAlpha(now - s.done, hold) : 1);
-        if (s.tool === "pencil") s.drawn = s.segs.length;
       }
       g.restore();
     }
@@ -256,6 +269,7 @@ export function createIsland(o) {
     bar.classList.add("is-dragging");
     measure();
     if (pop) measureLayer(pop);
+    if (cpop) measureLayer(cpop);
     if (toast) measureLayer(toast);
     const dx = e.clientX - pos.x, dy = e.clientY - pos.y;
     let last = null, step = 0;
@@ -265,6 +279,7 @@ export function createIsland(o) {
       place(last.clientX - dx, last.clientY - dy);
       last = null;
       if (pop) under(pop);
+      if (cpop) under(cpop);
       if (toast) under(toast);
     };
     const move = (m) => { last = m; if (!step) step = requestAnimationFrame(apply); };
@@ -289,14 +304,17 @@ export function createIsland(o) {
     if (fresh || el.vfW === undefined) measureLayer(el);
     const w = el.vfW, h = el.vfH;
     const up = innerHeight - (pos.y + size.h) - EDGE < h + EDGE && pos.y > innerHeight - (pos.y + size.h);
-    const left = Math.min(Math.max(EDGE, pos.x + size.w / 2 - w / 2), Math.max(EDGE, innerWidth - w - EDGE));
+    // vfStart (the colour popover): flush with the island's left edge, not centred
+    const want = el.vfStart ? pos.x : pos.x + size.w / 2 - w / 2;
+    const left = Math.min(Math.max(EDGE, want), Math.max(EDGE, innerWidth - w - EDGE));
     const shift = `${left - pos.x}px 0`;
     if (el.vfShift !== shift) { el.vfShift = shift; el.style.translate = shift; }
     if (el.vfUp !== up) {
       el.vfUp = up;
       el.style.top = up ? "" : `calc(100% + ${EDGE}px)`;
       el.style.bottom = up ? `calc(100% + ${EDGE}px)` : "";
-      el.style.transformOrigin = up ? "50% 100%" : "50% 0";
+      const x = el.vfStart ? "26px" : "50%";
+      el.style.transformOrigin = up ? `${x} 100%` : `${x} 0`;
     }
   }
 
@@ -327,6 +345,7 @@ export function createIsland(o) {
   }
   function openPop() {
     if (pop || !gal?.items?.length) return;
+    closeColor();
     dismissToast();
     pop = o.el("div", "vfd-pop");
     pop.setAttribute("role", "dialog");
@@ -363,6 +382,131 @@ export function createIsland(o) {
     pop.remove();
     pop = find = grid = null;
     mg.setAttribute("aria-expanded", "false");
+  }
+  // the colour popover: 8 ready colours, a saturation/brightness square, a hue strip, a hex field. A ready colour sets the ink and
+  // closes; the square, the strip and the field set it live and keep the popover open. Everything goes to setInk (and localStorage).
+  function openColor() {
+    if (cpop) return;
+    closePop();
+    dismissToast();
+    const box = o.el("div", "vfd-cpop");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", o.t("draw_color"));
+    const row = o.el("div", "vfd-swatches");
+    row.setAttribute("role", "radiogroup");
+    row.setAttribute("aria-label", o.t("draw_colors"));
+    const sws = COLORS.map(([n, hex]) => {
+      const b = o.el("button", "vfd-sw");
+      b.type = "button";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-label", o.t("color_" + n));
+      b.style.setProperty("--c", hex);
+      b.dataset.hex = hex;
+      row.append(b);
+      return b;
+    });
+    const slider = (cls, label) => {
+      const e = o.el("div", cls);
+      e.tabIndex = 0;
+      e.setAttribute("role", "slider");
+      e.setAttribute("aria-label", o.t(label));
+      const t = o.el("span", "vfd-thumb");
+      e.append(t);
+      return [e, t];
+    };
+    const [sv, svT] = slider("vfd-sv", "draw_sv");
+    const [hue, hT] = slider("vfd-hue", "draw_hue");
+    hue.setAttribute("aria-valuemin", "0");
+    hue.setAttribute("aria-valuemax", "360");
+    const pickBox = o.el("div", "vfd-pick");
+    pickBox.append(sv, hue);
+    const hexL = o.el("label", "vfd-hex");
+    const hDot = o.el("span", "vfd-dot");
+    const inp = o.el("input");
+    inp.maxLength = 6;
+    inp.spellcheck = false;
+    inp.setAttribute("aria-label", o.t("draw_hex"));
+    hexL.append(hDot, o.el("span", "", "#"), inp);
+    box.append(row, pickBox, hexL);
+
+    let [h, s, v] = rgb2hsv(hex2rgb(ink));
+    // external: the colour came from another tab, it is shown but not written back
+    const paintAll = (hex, fromInput, external) => {
+      for (const b of sws) {
+        const on = b.dataset.hex === hex;
+        b.setAttribute("aria-checked", String(on));
+        b.tabIndex = on ? 0 : -1;
+      }
+      if (!sws.some((b) => b.tabIndex === 0)) sws[0].tabIndex = 0;
+      sv.style.setProperty("--h", h);
+      svT.style.left = s * 100 + "%";
+      svT.style.top = (1 - v) * 100 + "%";
+      svT.style.setProperty("--c", hex);
+      hT.style.left = h / 360 * 100 + "%";
+      hT.style.setProperty("--c", `hsl(${h} 100% 50%)`);
+      hue.setAttribute("aria-valuenow", String(Math.round(h)));
+      hDot.style.setProperty("--ink", hex);
+      if (!fromInput) inp.value = hex.slice(1);
+      if (!external) setInk(hex, true);
+    };
+    const fromHsv = () => paintAll(rgb2hex(...hsv2rgb(h, s, v)));
+    const setHex = (hex, fromInput, external) => { [h, s, v] = rgb2hsv(hex2rgb(hex)); paintAll(hex, fromInput, external); };
+    cpaint = (hex, fromInput, external) => setHex(hex, fromInput, external);
+    for (const b of sws) b.addEventListener("click", () => { setHex(b.dataset.hex); closeColor(true); });
+    row.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      const next = sws[(sws.indexOf(document.activeElement) + d + sws.length) % sws.length];
+      next.focus({ preventScroll: true });
+      setHex(next.dataset.hex);
+    });
+    // a drag on the square or the strip: pointer capture, the position clamps to the area
+    const drag = (area, fn) => area.addEventListener("pointerdown", (e) => {
+      if (e.button) return;
+      e.preventDefault();
+      area.focus({ preventScroll: true });
+      area.setPointerCapture(e.pointerId);
+      const go = (ev) => {
+        const r = area.getBoundingClientRect();
+        fn(Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)));
+        fromHsv();
+      };
+      go(e);
+      area.addEventListener("pointermove", go);
+      const end = () => { area.removeEventListener("pointermove", go); area.removeEventListener("pointerup", end); area.removeEventListener("pointercancel", end); };
+      area.addEventListener("pointerup", end);
+      area.addEventListener("pointercancel", end);
+    });
+    drag(sv, (x, y) => { s = x; v = 1 - y; });
+    drag(hue, (x) => { h = x * 360; });
+    // arrows on a slider: 1%, with Shift 10%
+    const arrows = (area, fn) => area.addEventListener("keydown", (e) => {
+      const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!k) return;
+      e.preventDefault();
+      const st = e.shiftKey ? 0.1 : 0.01;
+      fn(k[0] * st, k[1] * st);
+      fromHsv();
+    });
+    const clamp = (x) => Math.min(1, Math.max(0, x));
+    arrows(sv, (dx, dy) => { s = clamp(s + dx); v = clamp(v - dy); });
+    arrows(hue, (dx, dy) => { h = clamp(h / 360 + dx - dy) * 360; });
+    inp.addEventListener("input", () => { if (/^[0-9a-f]{6}$/i.test(inp.value)) setHex("#" + inp.value.toUpperCase(), true); });
+    box.vfStart = true;
+    root.append(box);
+    cpop = box;
+    swatch.setAttribute("aria-expanded", "true");
+    tipOff();
+    setHex(ink.toUpperCase(), false, true);
+    under(box, true);
+  }
+  function closeColor(refocus) {
+    if (!cpop) return;
+    cpop.remove();
+    cpop = cpaint = null;
+    swatch.setAttribute("aria-expanded", "false");
+    if (refocus) swatch.focus({ preventScroll: true });
   }
   function choose(x) {
     const tc = o.timecode();
@@ -404,12 +548,17 @@ export function createIsland(o) {
     }).catch(() => { if (opened) retry = setTimeout(ask, 15000); });
   }
 
-  const away = (e) => { if (pop && !root.contains(e.target)) closePop(); };
+  const away = (e) => {
+    if (root.contains(e.target)) return;
+    if (pop) closePop();
+    if (cpop) closeColor();
+  };
   const keys = (e) => {
     if (e.key !== "Escape" || !opened) return;
-    if (pop) { closePop(); mg.focus({ preventScroll: true }); } else if (tool) pick(null);
+    if (cpop) closeColor(true);
+    else if (pop) { closePop(); mg.focus({ preventScroll: true }); } else if (tool) pick(null);
   };
-  const resize = () => { fit(); if (opened) { home(); if (pop) under(pop, true); if (toast) under(toast, true); } };
+  const resize = () => { fit(); if (opened) { home(); if (pop) under(pop, true); if (cpop) under(cpop, true); if (toast) under(toast, true); } };
 
   function open() {
     if (opened) return;
@@ -419,6 +568,7 @@ export function createIsland(o) {
     fit();
     home();
     addEventListener("resize", resize);
+    addEventListener("storage", follow);
     addEventListener("keydown", keys);
     document.addEventListener("pointerdown", away, true);
     o.onToggle?.(true);
@@ -430,6 +580,7 @@ export function createIsland(o) {
     strokes = []; cur = null;
     pick(null);
     closePop();
+    closeColor();
     dismissToast();
     tipOff();
     clearTimeout(retry);
@@ -440,6 +591,7 @@ export function createIsland(o) {
     root.remove();
     canvas.remove();
     removeEventListener("resize", resize);
+    removeEventListener("storage", follow);
     removeEventListener("keydown", keys);
     document.removeEventListener("pointerdown", away, true);
     o.onToggle?.(false);

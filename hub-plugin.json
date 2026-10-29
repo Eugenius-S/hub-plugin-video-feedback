@@ -3,7 +3,7 @@
   "icon": "icon.png",
   "description": "Show and tell instead of writing: press the camera next to the microphone and the screen and your voice start recording 3 seconds later. Draw on the screen with a pen, tag a Motion Gallery animation at a frame. The hub turns it into feedback by points. Costs more tokens than text.",
   "why": "Showing on screen and saying it aloud is faster than writing it out",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "hub": "^1.10",
   "web": "main.js",
   "needs": ["voice"],

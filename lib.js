@@ -183,8 +183,41 @@ export function message({ length, phrases: list, frames, voice, audio, cut, vide
 
 // ───── drawing over the screen: the pen island ─────
 // a stroke that is done stays HOLD ms fully visible, then fades out in FADE ms; hold 0 - it stays until it is erased
-// the ink is white: the canvas blends with `difference`, so it shows as an inverse of what lies under it
-export const DRAW = { hold: 5000, fade: 1200, width: 4, ink: "#ffffff" };
+// one ink colour for every tool, picked once and remembered; the stroke is drawn as it is, with no blending. The default is a
+// saturated red: it reads on white, on light grey and on black alike.
+export const DRAW = { hold: 5000, fade: 1200, width: 4, ink: "#ff3b30" };
+export const INK_KEY = "hub-video-feedback:ink";
+// "#RGB" or "#RRGGBB" -> "#rrggbb"; anything else (a stale or broken value from storage) -> null
+export function inkColor(v) {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(typeof v === "string" ? v.trim() : "");
+  if (!m) return null;
+  const h = m[1].toLowerCase();
+  return "#" + (h.length === 3 ? [...h].map((c) => c + c).join("") : h);
+}
+// the colour picker: 8 ready colours, and hex <-> hsv for the square and the hue strip
+export const COLORS = [["red", "#FF3B30"], ["orange", "#FF9500"], ["yellow", "#FFD60A"], ["green", "#34C759"],
+  ["blue", "#0A84FF"], ["violet", "#BF5AF2"], ["black", "#1C1C1E"], ["white", "#FFFFFF"]];
+export const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+export const rgb2hex = (r, g, b) => "#" + [r, g, b].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+export function rgb2hsv([r, g, b]) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, mx ? d / mx : 0, mx];
+}
+export function hsv2rgb(h, s, v) {
+  const f = (n) => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return [f(5), f(3), f(1)];
+}
+// perceived lightness of a colour (OKLab L, 0..1): a dark stroke gets a light edge and the other way round
+export function okL(hex) {
+  const [r, g, b] = hex2rgb(hex).map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return 0.2104542553 * l + 0.793617785 * m - 0.0040720033 * s;
+}
+export const edgeOf = (ink) => (okL(ink) > 0.6 ? "rgb(0 0 0 / 0.45)" : "rgb(255 255 255 / 0.7)");
 export const fadeAlpha = (age, hold = DRAW.hold, fade = DRAW.fade) =>
   !hold || age <= hold ? 1 : age >= hold + fade ? 0 : 1 - (age - hold) / fade;
 

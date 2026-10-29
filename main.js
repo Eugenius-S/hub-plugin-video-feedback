@@ -191,7 +191,7 @@ async function start(ctx, snap) {
 // of <html>, outside <body>, so it is on screen but not in the video and not in the frames (the strokes live on a canvas
 // inside <body> and are recorded). It works only when the picked surface is a tab (Chrome 132+): a whole screen or a window
 // has no such mechanism, there the island is recorded together with everything else. Returns whether the crop took hold.
-// The strokes blend with `difference`; inside the isolated body that needs a picture under them, and the page colour usually
+// The isolated body needs a picture under the strokes (a transparent body can be cropped to black), and the page colour usually
 // belongs to the viewport (it moves there from <html> or <body>), so while the crop holds, both paint the same opaque colour.
 const clear = (c) => !c || c === "transparent" || /^rgba?\(.*,\s*0\)$|^rgb\(.*\/\s*0\)$/.test(c);
 async function confine(track, r) {
