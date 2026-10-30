@@ -178,3 +178,14 @@
 .vfd-hex input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: none; color: var(--foreground); font: inherit; text-transform: uppercase; }
 .vfd-hex:focus-within { box-shadow: 0 0 0 2px var(--ring); }
 @media (prefers-reduced-motion: reduce) { .vfd-cpop { animation-name: vfd-fade; } .vfd-sw { transition: none; } }
+
+/* Clean (html.th-clean): neutral tokens of the theme instead of the blue accent; the recording button keeps its width, its red dot and
+   its timer inside the 32px row of composer buttons (the theme sizes every .btn.round and its span/svg children to 32/16 px) */
+html.th-clean .slot-composer-tools .btn.round.vf-btn.vf-count { color: var(--c-t1, var(--foreground)); }
+html.th-clean .slot-composer-tools .btn.round.vf-btn.vf-rec { width: auto; padding: 0 10px 0 8px; gap: 8px; color: var(--c-alert, var(--destructive)); }
+html.th-clean .slot-composer-tools .btn.round.vf-btn.vf-rec:hover { background: var(--c-fill, transparent); color: var(--c-alert, var(--destructive)); }
+html.th-clean .slot-composer-tools .btn.round.vf-btn > .vf-dot { flex: none; width: 8px; height: 8px; }
+html.th-clean .slot-composer-tools .btn.round.vf-btn > .vf-time { width: auto; height: auto; font-size: 14px; line-height: 20px; white-space: nowrap; }
+html.th-clean .slot-composer-tools .btn.round.vf-btn > .vf-num { width: auto; height: auto; }
+html.th-clean .vfd-btn[aria-pressed="true"], html.th-clean .vfd-btn[aria-expanded="true"] { background: var(--c-fill, var(--front-soft)); color: var(--c-t1, var(--foreground)); }
+html.th-clean .vfd-toast .vfd-i, html.th-clean .vfd-toast-undo { color: var(--c-t1, var(--foreground)); }
