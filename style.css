@@ -17,39 +17,21 @@
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
 
 /* ───── pen island over the screen (the look is the designer's mockup): the theme comes from the hub tokens ───── */
-.vfd-root, .vfd-away, .vfd-pip-doc {   /* the island's own names for the hub tokens: one place to retune the look */
+.vfd-root, .vfd-pip-doc {   /* the island's own names for the hub tokens: one place to retune the look */
   --vfd-surface: var(--card); --vfd-fg: var(--muted-foreground); --vfd-fg-strong: var(--foreground);
   --vfd-hover: var(--accent); --vfd-hover-strong: var(--muted-2); --vfd-on: var(--front-soft); --vfd-on-fg: var(--primary);
-  --vfd-line: var(--border); --vfd-pip-pad: 8px;
+  --vfd-line: var(--border); --vfd-pip-pad: 0px;
+  --vfd-radius: calc(var(--radius-xl) + 4px);   /* the panel and, with the padding taken off, its buttons */
 }
 .vfd-root { position: fixed; top: 0; left: 0; z-index: 2147483000; width: max-content; transform-origin: 0 0; will-change: transform; font-family: var(--font-ui, inherit); }   /* the place is a transform, set by island.js */
 .vfd-root, .vfd-root *, .vfd-root ::before, .vfd-root ::after { box-sizing: border-box; }
 .vfd-root[hidden], .vfd-root [hidden] { display: none !important; }
 /* in its own Picture-in-Picture window the island sits in the corner and the system moves the window: no grip, no transform */
-.vfd-root.vfd-pip { top: var(--vfd-pip-pad, 8px); left: var(--vfd-pip-pad, 8px); transform: none !important; will-change: auto; }
+.vfd-root.vfd-pip { top: var(--vfd-pip-pad, 0px); left: var(--vfd-pip-pad, 0px); transform: none !important; will-change: auto; }
 .vfd-root.vfd-pip .vfd-grip { display: none; }
-.vfd-root.vfd-pip .vfd-island { box-shadow: none; }   /* the window is the island: its own edge, no shadow */
+.vfd-root.vfd-pip .vfd-island { box-shadow: none; border-radius: 0; }   /* the window is the island: its own edge, no shadow, no corners to show the page through */
 .vfd-root.vfd-pip .vfd-rec .vf-time { min-width: 5ch; }   /* room for 10:00: the window cannot always grow */
 .vfd-pip-doc, .vfd-pip-doc body { margin: 0; background: var(--vfd-surface, #111); overflow: hidden; }
-/* in the page, where the island was: a note that it floats in its own window, and the way back */
-.vfd-away {
-  position: fixed; top: 0; left: 0; z-index: 2147483000;
-  display: inline-flex; align-items: center; gap: var(--space-2);
-  height: 40px; padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
-  background: var(--vfd-surface); color: var(--vfd-fg); border-radius: var(--radius-xl); box-shadow: var(--shadow-lift);
-  font: 500 var(--text-sm)/1 var(--font-ui); white-space: nowrap; user-select: none;
-  animation: vfd-fade var(--dur-fast) var(--ease-out) both;
-}
-.vfd-away[hidden] { display: none; }
-.vfd-away-back {
-  margin-inline-start: var(--space-1); height: 32px; padding: 0 var(--space-3); border: 0; cursor: pointer;
-  border-radius: calc(var(--radius-xl) - var(--space-1)); background: var(--vfd-hover); color: var(--vfd-fg-strong);
-  font: 600 var(--text-sm)/1 var(--font-ui);
-  transition: background-color var(--dur-hover) ease, transform var(--dur-fast) var(--ease-out);
-}
-.vfd-away-back:active { transform: scale(0.97); }
-.vfd-away-back:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-@media (hover: hover) and (pointer: fine) { .vfd-away-back:hover { background: var(--vfd-hover-strong); } }
 /* a <video> or <img> that went fullscreen is shown by our own box (a copy), so the island and the drawing can live inside it */
 .vfd-viewer { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; z-index: 2147482000; }
 .vfd-viewer:fullscreen { width: 100%; height: 100%; }
@@ -75,7 +57,7 @@ video[data-vfd-fs]::-webkit-media-controls-fullscreen-button { opacity: 0; point
   display: inline-flex; align-items: center; gap: var(--space-1);
   padding: var(--vfd-pad);
   background: var(--vfd-surface); color: var(--vfd-fg);
-  border-radius: var(--radius-xl);
+  border-radius: var(--vfd-radius);
   box-shadow: var(--shadow-lift);
   font-family: var(--font-ui);
   user-select: none;
@@ -85,14 +67,14 @@ video[data-vfd-fs]::-webkit-media-controls-fullscreen-button { opacity: 0; point
   position: relative;
   width: 32px; height: 40px; display: grid; place-items: center;
   color: var(--muted-foreground); cursor: grab; touch-action: none;
-  border-radius: calc(var(--radius-xl) - var(--vfd-pad));
+  border-radius: calc(var(--vfd-radius) - var(--vfd-pad));
   transition: color var(--dur-hover) ease;
 }
 .vfd-btn {
   position: relative;
   width: 40px; height: 40px; display: grid; place-items: center;
   padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer;
-  border-radius: calc(var(--radius-xl) - var(--vfd-pad));
+  border-radius: calc(var(--vfd-radius) - var(--vfd-pad));
   transition: background-color var(--dur-hover) ease, color var(--dur-hover) ease;
 }
 .vfd-btn:active { transform: scale(0.97); transition: transform var(--dur-fast) var(--ease-out); }
@@ -144,7 +126,6 @@ video[data-vfd-fs]::-webkit-media-controls-fullscreen-button { opacity: 0; point
 @keyframes vfd-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .vfd-pop, .vfd-toast { animation-name: vfd-fade; }
-  .vfd-away-back { transition: none; }
   .vfd-island { transition: none; }
 }
 .vfd-pop {

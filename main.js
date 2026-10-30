@@ -28,6 +28,7 @@ const VOICE_JOBS = 2;
 
 let R = null;          // the running recording: {phase: "count" | "rec" | "work", key, ...}
 const buttons = new Map();   // input field key -> button
+const inButtons = (el) => [...buttons.values()].some((b) => b.contains(el));   // a press on a plugin button counts as the click that floats the island out
 let hubRef = null;
 let pending = [];      // undelivered recordings from IndexedDB (a past life of the tab) - the input field of their chat sends them
 const resuming = new Set();
@@ -60,12 +61,12 @@ export default function register(hub) {
         b.__trash.setAttribute("aria-label", b.__trash.title);
         b.__trash.append(bin());
         b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
-        // the pen: brings the drawing island back after it was closed (it opens by itself when the recording starts)
+        // the pen: brings the drawing island back after it was closed, in its own window too (it opens by itself when the recording starts)
         b.__pen = hub.el("button", "btn round quiet vf-pen");
         b.__pen.type = "button";
         b.__pen.hidden = true;
         b.__pen.append(pen());
-        b.__pen.addEventListener("click", () => { if (R && R.key === root.__ctx.key) R.island?.open(); });
+        b.__pen.addEventListener("click", () => { if (R && R.key === root.__ctx.key) { R.island?.open(); R.island?.floatForScreen?.(inButtons); } });
         root.append(b.__pen, b.__trash, b);
         root.__btn = b;
       }
@@ -288,9 +289,9 @@ function record() {
     onToggle: () => paintAll(), onStop: () => stop(), onDiscard: () => discard(),
   });
   r.island.open();
-  // a whole screen or a window: the island on the page would be covered by other programs, so it floats out into its own window
-  const surface = r.screen.getVideoTracks()[0].getSettings?.().displaySurface;
-  if (surface === "monitor" || surface === "window") r.island.floatForScreen((el) => [...buttons.values()].some((b) => b.contains(el)));
+  // the island goes into its own small window at once, for any recording; if the browser wants a click first,
+  // the first press on the island or on a plugin button floats it out
+  r.island.floatForScreen(inButtons);
   if (r.mic) {
     r.audio = new AudioContext();
     r.an = r.audio.createAnalyser();

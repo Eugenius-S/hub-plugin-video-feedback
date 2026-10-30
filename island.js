@@ -16,7 +16,7 @@ import { COLORS, DRAW, INK_KEY, count, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb,
 const NS = "http://www.w3.org/2000/svg";
 const POS = "hub-video-feedback:island";
 const EDGE = 8;        // the popover and the toast keep this far from the screen edge, and sit this far under the island
-const PIP_PAD = 8;     // the island's margin inside the Picture-in-Picture window
+const PIP_PAD = 0;     // the island's margin inside the Picture-in-Picture window: none, the window is the island
 const SHOWN = 60;      // cards drawn at once in the popover
 const TOOLS = ["pencil", "rect", "oval", "line"];
 // outline icons from the designer's mock-up (Icons8 and Material outlined; move is Material drag_indicator, six dots), viewBox 0 0 24 24, currentColor
@@ -112,16 +112,11 @@ export function createIsland(o) {
   sepMg.hidden = mg.hidden = true;   // only when Motion Gallery answers
   const shut = btn(o.t("draw_close"), "close");
   shut.dataset.act = "close";
-  // the Picture-in-Picture button: floats the island out into its own window above everything, in that window it brings it back
+  // the Picture-in-Picture button: floats the island out into its own window above everything. It is on the page only: in the window
+  // there is no way back, the island can only be closed (the window's cross or ours)
   const float = btn(o.t("draw_pip"), "pip");
   float.dataset.act = "pip";
   float.hidden = !globalThis.documentPictureInPicture?.requestWindow;
-  const floatLabel = (on) => {
-    const t = o.t(on ? "draw_pip_back" : "draw_pip");
-    float.dataset.tip = t;
-    float.setAttribute("aria-label", t);
-    float.setAttribute("aria-pressed", String(on));
-  };
   // the stop button: the red dot and the running time, as the hub's record button; only while the screen is recorded
   const sepRec = o.el("span", "vfd-sep");
   const rec = o.el("button", "vfd-btn vfd-rec");
@@ -130,13 +125,12 @@ export function createIsland(o) {
   const recTime = o.el("span", "vf-time");
   rec.append(o.el("span", "vf-dot"), recTime);
   // the bin before the stop button: the same as the bin by the input field - stop and erase, nothing is sent
-  const sepTrash = o.el("span", "vfd-sep");
   const trash = btn(o.t("trash"), "trash");
   trash.classList.add("vfd-trash");
   trash.dataset.act = "discard";
   trash.dataset.tip = o.t("rec_trash");
-  sepRec.hidden = trash.hidden = sepTrash.hidden = rec.hidden = true;
-  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, sepTrash, rec, o.el("span", "vfd-sep"), float, shut);
+  sepRec.hidden = trash.hidden = rec.hidden = true;
+  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, rec, o.el("span", "vfd-sep"), float, shut);
   rec.addEventListener("click", () => { o.onStop?.(); close(); });
   trash.addEventListener("click", () => { o.onDiscard?.(); close(); });
   // recording(time): the screen is recorded, the button shows the running time; recording(null): it is hidden again
@@ -148,13 +142,12 @@ export function createIsland(o) {
       rec.dataset.tip = o.t("rec_stop");
     }
     if (rec.hidden === !on) return;
-    sepRec.hidden = trash.hidden = sepTrash.hidden = rec.hidden = !on;
-    if (opened) home();   // the bar changed its width: centre it again (a remembered place stays)
+    sepRec.hidden = trash.hidden = rec.hidden = !on;
+    if (opened) { home(); pipFit(); }   // the bar changed its width: centre it again (a remembered place stays), the window follows
   }
   mg.addEventListener("click", () => (pop ? closePop() : openPop()));
   shut.addEventListener("click", () => close());
-  float.addEventListener("click", () => floatToggle());
-  floatLabel(false);
+  float.addEventListener("click", () => floatOut());
 
   // tooltip: under the button, for the pointer and for the keyboard (not in the small window: there is no room under the island)
   const tipOn = (e) => {
@@ -669,7 +662,6 @@ export function createIsland(o) {
     const inside = fe && fe !== document.documentElement && !NO_CHILDREN.test(fe.localName) && fe.isConnected ? fe : null;
     const [r, c] = inside ? [inside, inside] : [document.documentElement, document.body];
     if (!pipWin && root.parentNode !== r) r.append(root);   // while it floats, the island sits in its own window
-    if (pipWin && awayEl.parentNode !== r) r.append(awayEl);   // and the page has the note in its place
     canvasTo(c);
     if (opened && fsBtn.parentNode !== r) r.append(fsBtn);
     scale();
@@ -728,7 +720,7 @@ export function createIsland(o) {
     if (!opened) return;
     const fe = document.fullscreenElement;
     if (viewer && fe !== viewer.box) leaveViewer();
-    if (!fe && pipWin && pipAuto) closePip();   // it floated only to get past a fullscreen
+    if (!fe && pipWin && pipAuto) closePip();   // it floated only to get past a fullscreen: back on the page
     if (fe && COPYABLE.test(fe.localName) && !gaveUp.has(fe) && !viewer) { enterViewer(fe); return; }
     if (fe && /^(iframe|embed|object|canvas)$/.test(fe.localName)) floatOut(true);
     mount();
@@ -873,12 +865,13 @@ export function createIsland(o) {
   async function floatOut(auto) {
     if (pipWin || !opened || !canPip()) return false;
     closePop(); closeColor(); dismissToast(); tipOff();
-    const at = { ...pos };   // where the island was on the page: the note stays there
-    root.classList.add("vfd-pip");   // measured as it will look in the window (the timer has room for 10:00), and put back before a paint
-    const k0 = k;
+    root.classList.add("vfd-pip");   // measured as it will look in the window (the timer has room for 10:00, no button to float out), and put back before a paint
+    const k0 = k, fh = float.hidden;
     k = 1;
+    float.hidden = true;
     measure();
     k = k0;
+    float.hidden = fh;
     root.classList.remove("vfd-pip");
     let w;
     try {
@@ -890,49 +883,43 @@ export function createIsland(o) {
     pipWin = w; win = w; pipAuto = !!auto;
     root.classList.add("vfd-pip");
     root.style.transform = "";
-    showAway(at);
-    floatLabel(true);
     w.document.body.append(root);
+    float.hidden = true;   // the way back is not offered: the window is only closed
     w.addEventListener("keydown", keys);
     w.document.addEventListener("pointerdown", away, true);
-    w.addEventListener("pagehide", () => { if (pipWin === w) back(); });
+    // the person closed the window: the island is closed too (the recording goes on, the pen on the page brings it back).
+    // A window opened only to get past a fullscreen element just goes back to the page when that ends
+    w.addEventListener("pagehide", () => {
+      if (pipWin !== w) return;
+      const fs = pipAuto;
+      leavePip();
+      if (fs) { if (opened) { mount(); fit(); home(); } } else close();
+    });
     home();
     o.onFloat?.(true);
     return true;
   }
-  // the window was closed (or the island was): the island is back on the page, where it was
-  function back() {
-    if (!pipWin) return;
+  // the island is no longer in the window (it was closed, or goes back to the page); returns the window
+  function leavePip() {
     const w = pipWin;
+    if (!w) return null;
     pipWin = null; win = window; pipAuto = false;
     w.removeEventListener("keydown", keys);
     closePop(); closeColor(); dismissToast(); tipOff();
     root.classList.remove("vfd-pip");
     root.style.transform = "";
-    awayEl.remove();
-    floatLabel(false);
-    if (opened) { mount(); fit(); home(); }
+    float.hidden = !canPip();
     o.onFloat?.(false);
-  }
-  // in the page, where the island was: a note that it is in its own window, with the way back
-  const awayEl = o.el("div", "vfd-away");
-  awayEl.setAttribute("role", "status");
-  const awayBack = o.el("button", "vfd-away-back", o.t("draw_away_back"));
-  awayBack.type = "button";
-  awayBack.addEventListener("click", () => closePip());
-  awayEl.append(icon("pip", true), o.el("span", "", o.t("draw_away")), awayBack);
-  function showAway(at) {
-    awayEl.style.transform = `translate3d(${at.x}px, ${at.y}px, 0)`;
-    mount();
+    return w;
   }
   function closePip() {
-    const w = pipWin;
+    const w = leavePip();
     if (!w) return;
-    back();
+    if (opened) { mount(); fit(); home(); }
     try { w.close(); } catch { /* gone */ }
   }
-  // the window grows for a popover and shrinks back. It can only change size on a user action (the click that opened the popover);
-  // without one the size stays, which is harmless
+  // the window is exactly the panel, and follows it when the buttons change; it grows for a popover and shrinks back.
+  // It can only change size on a user action (the click that opened the popover or pressed Record); without one the size stays
   function pipFit() {
     const w = pipWin;
     if (!w) return;
@@ -943,11 +930,9 @@ export function createIsland(o) {
       w.resizeTo(Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth), Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight));
     } catch { /* no user action */ }
   }
-  // the island or the floating window as a toggle: the button floats it out, in the window it brings it back
-  const floatToggle = () => (pipWin ? closePip() : floatOut());
 
-  // The screen or a window is recorded, not a tab: the island on the page is hidden by whatever lies over the hub, so it floats out
-  // by itself. The window needs a user action, and the click on "Record" is used up by the screen pick, so when the browser refuses,
+  // The island floats out into its own window by itself (a whole screen or a window would hide it on the page, and a tab
+  // recording is no worse off). The window needs a user action, and the click on "Record" is used up by the screen pick, so when the browser refuses,
   // the first press on the island (or on whatever also(target) accepts, the plugin's own buttons) opens it. A window the person
   // closed is not opened again by itself.
   let armed = null;
@@ -1003,7 +988,6 @@ export function createIsland(o) {
     leaveViewer();
     fsOff();
     root.remove();
-    awayEl.remove();
     canvas.remove();
     removeEventListener("resize", resize);
     document.removeEventListener("fullscreenchange", screenChanged);
