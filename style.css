@@ -1,5 +1,5 @@
 /* Video feedback: the icon next to the microphone; countdown, recording in progress (dot and time), transcription */
-.vf-btn .icon { width: 22px; height: 22px; }
+.vf-btn .icon { width: calc(var(--icon-size, 16px) * 22 / 16); height: calc(var(--icon-size, 16px) * 22 / 16); }   /* 22px by default; a theme that sets --icon-size (Clean: 16px) scales it with the other buttons */
 .btn.round.vf-btn.vf-count { color: var(--primary); }
 .vf-num { font: 600 var(--text-md, 16px)/1 var(--font-ui, inherit); font-variant-numeric: tabular-nums; }
 .btn.round.vf-btn.vf-rec { width: auto; padding: 0 var(--space-2, 8px); gap: 6px; color: var(--destructive); }
