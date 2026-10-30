@@ -430,7 +430,13 @@ export function createIsland(o) {
     pop.setAttribute("role", "dialog");
     pop.setAttribute("aria-label", o.t("tag_mg"));
     const title = o.el("div", "vfd-pop-title", "Motion Gallery");
-    title.append(o.el("span", "vfd-pop-num", count(gal.items.length, o.t("tag_count_forms"))));
+    // the cross of the island itself (the same icon and button), so that closing the gallery is plain to see
+    const x = btn(o.t("tag_close"), "close");
+    x.classList.add("vfd-pop-x");
+    x.addEventListener("click", () => { closePop(); mg.focus({ preventScroll: true }); });
+    const side = o.el("div", "vfd-pop-side");
+    side.append(o.el("span", "vfd-pop-num", count(gal.items.length, o.t("tag_count_forms"))), x);
+    title.append(side);
     const label = o.el("label", "vfd-search");
     find = o.el("input", "vfd-find");
     find.type = "text";
@@ -926,8 +932,18 @@ export function createIsland(o) {
     measure();
     const layer = pop || cpop || toast;
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
+    const nw = Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth);
+    const nh = Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight);
+    const ow = w.outerWidth, oh = w.outerHeight, x = w.screenX, y = w.screenY;
+    if (nw === ow && nh === oh) return;
+    // the window keeps the screen corner it is pressed to: a plain resize holds the top left, and a window by the right or bottom
+    // edge is pushed back onto the screen (it jumped to the top and came back). The side nearer to the edge of the screen stays put
+    const sc = w.screen, l = sc.availLeft || 0, t = sc.availTop || 0;
+    const right = l + sc.availWidth - (x + ow) < x - l, bottom = t + sc.availHeight - (y + oh) < y - t;
+    const nx = right ? x + ow - nw : x, ny = bottom ? y + oh - nh : y;
     try {
-      w.resizeTo(Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth), Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight));
+      // growing: move first (nothing is pushed back), shrinking: resize first
+      if (nw * nh > ow * oh) { w.moveTo(nx, ny); w.resizeTo(nw, nh); } else { w.resizeTo(nw, nh); w.moveTo(nx, ny); }
     } catch { /* no user action */ }
   }
 

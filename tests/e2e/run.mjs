@@ -1138,6 +1138,24 @@ const fakePip = (gesture) => `(() => {
     document.body.append(f);
     const w = f.contentWindow;
     w.close = () => { f.remove(); };
+    // the geometry of a real window: a frame around the page, a screen (the page's viewport) it cannot leave, a resize that
+    // keeps the top left, and a browser that pushes a window back onto the screen when it grows past an edge
+    const CH = { w: 0, h: 32 }, SW = innerWidth, SH = innerHeight;
+    const g = { x: 0, y: 0, w: width + CH.w, h: height + CH.h };
+    const clamp = () => { g.x = Math.max(0, Math.min(g.x, SW - g.w)); g.y = Math.max(0, Math.min(g.y, SH - g.h)); };
+    const apply = () => {
+      f.style.width = (g.w - CH.w) + "px"; f.style.height = (g.h - CH.h) + "px";
+      if (window.__pipVisible) { f.style.left = g.x + "px"; f.style.top = g.y + "px"; f.style.zIndex = 2147483647; f.style.boxShadow = "0 8px 32px #0006"; }
+    };
+    g.x = SW - g.w - 20; g.y = SH - g.h - 20;
+    const get = (k, v) => Object.defineProperty(w, k, { configurable: true, get: v });
+    get("screenX", () => g.x); get("screenY", () => g.y); get("outerWidth", () => g.w); get("outerHeight", () => g.h);
+    get("innerWidth", () => g.w - CH.w); get("innerHeight", () => g.h - CH.h);
+    get("screen", () => ({ availLeft: 0, availTop: 0, availWidth: SW, availHeight: SH }));
+    Object.defineProperty(w, "resizeTo", { configurable: true, value: (nw, nh) => { g.w = nw; g.h = nh; clamp(); apply(); } });
+    Object.defineProperty(w, "moveTo", { configurable: true, value: (x, y) => { g.x = x; g.y = y; clamp(); apply(); } });
+    window.__pipGeo = () => ({ x: g.x, y: g.y, w: g.w, h: g.h, right: g.x + g.w, bottom: g.y + g.h });
+    window.__pipPlace = (x, y) => { g.x = x; g.y = y; clamp(); apply(); };
     window.__pip = w;
     return w;
   } } });
@@ -1190,6 +1208,70 @@ async function away() {
     await until(() => h.sends.length, "the recording is sent from the window's stop button", 60000);
     await until(async () => !(await phase(b)), "the recording stopped", 20000);
     check(await b.ev("!document.getElementById('fakepip') && !document.querySelector('.vfd-root')?.checkVisibility?.()"), "after the stop: no window, no island");
+  } finally { b.close(); h.close(); }
+}
+
+// 17. Motion Gallery in the island's window: the gallery has its own cross (the island's cross, repeated), closing it brings the
+// window back to its size, and the screen corner the window is pressed to stays where it was while it grows and shrinks
+async function galleryClose() {
+  const h = newHub({ gallery: true });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    const mg = "window.__pip.document.querySelector('.vfd-btn[data-act=mg]')";
+    await until(() => b.ev(`!${mg}.hidden`), "the Motion Gallery icon appears in the window", 20000);
+    await b.ev("window.__pipVisible = true; 0");
+    const geo = () => b.ev("window.__pipGeo()");
+    const near = (a, c) => Math.abs(a - c) <= 1;
+    const corners = [["bottom right", "br", 10000, 10000], ["top left", "tl", 0, 0], ["bottom left", "bl", 0, 10000], ["top right", "tr", 10000, 0]];
+    // the stand-in window starts at the size measured on the page, and the real one is fitted to its content on the first change: open and
+    // close the gallery once, so that every corner starts from the settled size
+    await b.ev(`${mg}.click()`);
+    await until(() => b.ev("window.__pip.document.querySelectorAll('.vfd-card').length === 4"), "the gallery opens once to settle the window");
+    await b.ev("window.__pip.document.querySelector('.vfd-pop .vfd-pop-x').click()");
+    await until(() => b.ev("!window.__pip.document.querySelector('.vfd-pop')"), "the gallery closes after the settling");
+    await sleep(200);
+    for (const [name, corner, x, y] of corners) {
+      await b.ev(`window.__pipPlace(${x}, ${y}); 0`);
+      const before = await geo();
+      await shotOf(b, `gallery-${corner}-before`);
+      await b.ev(`${mg}.click()`);
+      await until(() => b.ev("window.__pip.document.querySelectorAll('.vfd-card').length === 4"), `${name}: the gallery opens in the window`);
+      await sleep(200);
+      const open = await geo();
+      check(open.h > before.h, `${name}: the window grew for the gallery (${before.h} -> ${open.h})`);
+      const edgeX = corner.endsWith("r") ? "right" : "x", edgeY = corner.startsWith("b") ? "bottom" : "y";
+      check(near(open[edgeX], before[edgeX]) && near(open[edgeY], before[edgeY]), `${name}: the corner stays where it was while the window grows (${JSON.stringify(before)} -> ${JSON.stringify(open)})`);
+      check(await b.ev("(() => { const w = window.__pip; const r = w.document.querySelector('.vfd-pop').getBoundingClientRect(); return r.bottom <= w.innerHeight + 1 && r.right <= w.innerWidth + 1 && r.left >= -1 && r.top >= -1; })()"), `${name}: the gallery is inside the window`);
+      await shotOf(b, `gallery-${corner}-open`);
+      // the cross: the island's own button, with the island's own icon
+      const cross = await b.ev(`(() => { const d = window.__pip.document; const x = d.querySelector('.vfd-pop .vfd-pop-x'); const own = d.querySelector('.vfd-btn[data-act=close]'); if (!x || !own) return null; const a = x.getBoundingClientRect(), p = d.querySelector('.vfd-pop').getBoundingClientRect(); return { cls: x.classList.contains('vfd-btn'), same: x.innerHTML === own.innerHTML, label: x.getAttribute('aria-label') || '', w: a.width, h: a.height, inside: a.left >= p.left && a.right <= p.right && a.top >= p.top && a.bottom <= p.bottom }; })()`);
+      check(!!cross && cross.cls && cross.same && cross.inside, `${name}: the gallery has the island's own cross (${JSON.stringify(cross)})`);
+      check(!!cross && /Motion Gallery/.test(cross.label), `${name}: the cross says what it closes (${cross && cross.label})`);
+      await b.ev("window.__pip.document.querySelector('.vfd-pop .vfd-pop-x').click()");
+      await until(() => b.ev("!window.__pip.document.querySelector('.vfd-pop')"), `${name}: the cross closes the gallery`);
+      await sleep(200);
+      const after = await geo();
+      check(near(after.w, before.w) && near(after.h, before.h), `${name}: the window shrinks back (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
+      check(near(after.x, before.x) && near(after.y, before.y), `${name}: the window is where it was, no jump (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
+      check(await b.ev(`window.__pip.document.activeElement === ${mg} && ${mg}.getAttribute('aria-expanded') === 'false'`), `${name}: the focus is back on the gallery icon`);
+      await shotOf(b, `gallery-${corner}-after`);
+    }
+    // Esc is the second way out: the window comes back the same way
+    await b.ev("window.__pipPlace(10000, 10000); 0");
+    const before = await geo();
+    await b.ev(`${mg}.click()`);
+    await until(() => b.ev("!!window.__pip.document.querySelector('.vfd-pop')"), "the gallery opens again");
+    await b.ev("window.__pip.document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 0");
+    await until(() => b.ev("!window.__pip.document.querySelector('.vfd-pop')"), "Esc closes the gallery");
+    await sleep(200);
+    const after = await geo();
+    check(near(after.x, before.x) && near(after.y, before.y) && near(after.h, before.h), `Esc: the window is back in place (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
   } finally { b.close(); h.close(); }
 }
 
@@ -1330,7 +1412,7 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, smooth };
+const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
