@@ -73,6 +73,13 @@ class Source(unittest.TestCase):
         self.assertNotIn("memory: false", js)                          # video chunks pile up in memory, not only in IndexedDB
         self.assertIn("VIDEO_TRIES", js)                               # a hub refusal does not lose the video at once: the recording waits for the next visit
 
+    def test_stop_works_from_any_chat(self):
+        # one recording per page: the button, the bin and the pen act on it from every chat; only delivery ("work") is locked
+        js = read("main.js")
+        self.assertNotIn("R.key === root.__ctx.key", js)               # no check that the click comes from the chat that started it
+        self.assertNotIn('"busy"', js)                                 # another chat is not shown as "busy" (disabled)
+        self.assertIn('b.disabled = phase === "work"', js)
+
     def test_pen_island_is_outside_the_recorded_body_and_the_gallery_is_only_read(self):
         # the island sits outside <body> so a tab capture can crop it out of the video; Motion Gallery is only read, locally
         main, isl = read("main.js"), read("island.js")

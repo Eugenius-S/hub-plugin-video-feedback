@@ -222,6 +222,39 @@ async function normal() {
   } finally { b.close(); h.close(); }
 }
 
+// 1b. one recording per page: started in chat A, the button in chat B looks like a stop and stops it, the video goes to chat A
+async function stopAnywhere() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h);
+    await b.ev(`(() => {
+      const send = window.__ctx.send;
+      window.__via = [];
+      window.__ctx.send = (text, metas) => { window.__via.push("A"); return send(text, metas); };
+      const rootB = document.createElement("div");
+      rootB.id = "rootB";
+      document.body.append(rootB);
+      window.__slot.render(rootB, { voice: true }, { key: "chat2", send: (text, metas) => { window.__via.push("B"); return send(text, metas); } });
+      return 1;
+    })()`);
+    const btnB = "document.querySelector('#rootB .vf-btn')";
+    check(await b.ev(`${btnB}.className.includes('vf-idle') && !${btnB}.disabled`), "before the recording the button in chat B is idle");
+    await record(b, 6);
+    await sleep(600);
+    check(await b.ev(`${btnB}.className.includes('vf-rec') && !${btnB}.disabled`), "while recording, the button in chat B is a stop button, not disabled");
+    check(await b.ev(`!!${btnB}.querySelector('.vf-time')`), "chat B shows the timer too");
+    check(await b.ev("!document.querySelector('#rootB .vf-trash').hidden"), "the bin in chat B is there while recording");
+    await b.ev(`${btnB}.click()`);
+    await until(() => h.sends.length, "the message in the chat after the stop in chat B");
+    check(h.sends.length === 1, "one message");
+    check(await b.ev("JSON.stringify(window.__via)") === '["A"]', "the video went to chat A, where the recording was started");
+    check(videos(h).length === 1 && isWebm(videos(h)[0].path), "a real webm arrived");
+    await until(async () => !(await held(b)), "the page is released after delivery", 10000);
+  } finally { b.close(); h.close(); }
+}
+
 // 2. the hub restarted in the middle of the video upload (twice) and refused the first send: it still arrived, one message
 async function restartMidSend() {
   const h = newHub({ dieOnVideo: 2, failSends: 1 });
@@ -1458,7 +1491,7 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
+const cases = { nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

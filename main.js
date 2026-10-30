@@ -53,39 +53,38 @@ export default function register(hub) {
       if (!b) {
         b = hub.el("button", "btn round quiet vf-btn");
         b.type = "button";
-        b.addEventListener("click", () => (R ? (R.key === root.__ctx.key ? stop() : null) : start(root.__ctx, snap)));
+        b.addEventListener("click", () => (R ? stop() : start(root.__ctx, snap)));   // one recording per page: stop works from any chat
         // the bin is there while recording: said the wrong thing - delete it, nothing goes to the agent
         b.__trash = hub.el("button", "btn round quiet vf-trash");
         b.__trash.type = "button";
         b.__trash.title = t("trash");
         b.__trash.setAttribute("aria-label", b.__trash.title);
         b.__trash.append(bin());
-        b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
+        b.__trash.addEventListener("click", () => { if (R) discard(); });
         // the pen: brings the drawing island back after it was closed, in its own window too (it opens by itself when the recording starts)
         b.__pen = hub.el("button", "btn round quiet vf-pen");
         b.__pen.type = "button";
         b.__pen.hidden = true;
         b.__pen.append(pen());
-        b.__pen.addEventListener("click", () => { if (R && R.key === root.__ctx.key) { R.island?.open(); R.island?.floatForScreen?.(inButtons); } });
+        b.__pen.addEventListener("click", () => { if (R) { R.island?.open(); R.island?.floatForScreen?.(inButtons); } });
         root.append(b.__pen, b.__trash, b);
         root.__btn = b;
       }
       buttons.set(ctx.key, b);
-      paint(b, ctx.key);
+      paint(b);
       if (!R) resume(ctx).catch(() => {});
     },
   });
 }
 
-function paint(b, key) {
-  const mine = R && R.key === key;
-  const phase = mine ? R.phase : R ? "busy" : "idle";
-  const penned = mine && phase === "rec" && !!R.island && !R.island.isOpen();   // the island is closed: the pen button brings it back
+function paint(b) {
+  const phase = R ? R.phase : "idle";
+  const penned = R && phase === "rec" && !!R.island && !R.island.isOpen();   // the island is closed: the pen button brings it back
   const sig = phase + (phase === "count" ? R.left : phase === "rec" ? clock(performance.now() - R.t0) : "") + (lang() || "") + (penned ? "p" : "");
   if (b.dataset.sig === sig) return;
   b.dataset.sig = sig;
   b.className = "btn round quiet vf-btn vf-" + phase;
-  b.disabled = phase === "busy" || phase === "work";
+  b.disabled = phase === "work";
   b.replaceChildren();
   if (phase === "count") b.append(hubRef.el("span", "vf-num", String(R.left)));
   else if (phase === "rec") b.append(hubRef.el("span", "vf-dot"), hubRef.el("span", "vf-time", clock(performance.now() - R.t0)));
@@ -100,7 +99,7 @@ function paint(b, key) {
   }[phase];
   b.title = say;
   b.setAttribute("aria-label", say);
-  if (b.__trash) b.__trash.hidden = !(mine && (phase === "rec" || phase === "count"));
+  if (b.__trash) b.__trash.hidden = !(phase === "rec" || phase === "count");
   if (b.__pen) {
     b.__pen.hidden = !penned;
     b.__pen.title = t("draw_open");
@@ -111,7 +110,7 @@ function paint(b, key) {
 function paintAll() {
   // the hub page does not reload by itself while this mark stands: a recording is running or not delivered yet
   document.documentElement.toggleAttribute("data-hub-hold", !!R && R.phase !== "count");
-  for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key);
+  for (const [key, b] of buttons) if (b.isConnected) paint(b); else buttons.delete(key);
   // the island's stop button shows the same time as the hub's record button
   R?.island?.recording(R.phase === "rec" ? clock(performance.now() - R.t0) : null);
 }
