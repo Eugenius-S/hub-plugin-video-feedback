@@ -53,6 +53,8 @@ navigator.mediaDevices.getDisplayMedia = async () => {
     track.restrictTo = async (t) => { if (Q.has("slowcrop")) await new Promise((ok) => setTimeout(ok, 1500)); window.__restricted = t.el.tagName; };
     globalThis.RestrictionTarget = { fromElement: async (el) => ({ el }) };
   }
+  // ?surface=monitor|window: a whole screen or a window was picked (the real getSettings tells which one)
+  if (Q.has("surface")) stream.getVideoTracks()[0].getSettings = () => ({ displaySurface: Q.get("surface") });
   return stream;
 };
 navigator.mediaDevices.getUserMedia = async () => {

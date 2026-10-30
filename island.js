@@ -946,6 +946,29 @@ export function createIsland(o) {
   // the island or the floating window as a toggle: the button floats it out, in the window it brings it back
   const floatToggle = () => (pipWin ? closePip() : floatOut());
 
+  // The screen or a window is recorded, not a tab: the island on the page is hidden by whatever lies over the hub, so it floats out
+  // by itself. The window needs a user action, and the click on "Record" is used up by the screen pick, so when the browser refuses,
+  // the first press on the island (or on whatever also(target) accepts, the plugin's own buttons) opens it. A window the person
+  // closed is not opened again by itself.
+  let armed = null;
+  const disarm = () => { if (armed) { document.removeEventListener("pointerdown", armed, true); armed = null; } };
+  function arm(also) {
+    if (armed || !opened || pipWin) return;
+    armed = (e) => {
+      if (!root.contains(e.target) && !also?.(e.target)) return;
+      disarm();
+      // started inside the press: that press is the user action the window needs
+      floatOut(false).then((ok) => { if (!ok) arm(also); });
+    };
+    document.addEventListener("pointerdown", armed, true);
+  }
+  async function floatForScreen(also) {
+    if (!opened || pipWin || !canPip()) return !!pipWin;
+    if (await floatOut(false)) return true;
+    arm(also);
+    return false;
+  }
+
   function open() {
     if (opened) return;
     opened = true;
@@ -975,6 +998,7 @@ export function createIsland(o) {
     clearTimeout(wake);
     frameId = 0;
     dirty = null;
+    disarm();
     closePip();
     leaveViewer();
     fsOff();
@@ -990,5 +1014,5 @@ export function createIsland(o) {
   }
   function destroy() { close(); }
 
-  return { open, close, destroy, isOpen: () => opened, pick, recording, box: root, canvas, strokes: () => strokes.length };
+  return { open, close, destroy, isOpen: () => opened, pick, recording, floatForScreen, isFloating: () => !!pipWin, box: root, canvas, strokes: () => strokes.length };
 }

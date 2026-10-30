@@ -288,6 +288,9 @@ function record() {
     onToggle: () => paintAll(), onStop: () => stop(), onDiscard: () => discard(),
   });
   r.island.open();
+  // a whole screen or a window: the island on the page would be covered by other programs, so it floats out into its own window
+  const surface = r.screen.getVideoTracks()[0].getSettings?.().displaySurface;
+  if (surface === "monitor" || surface === "window") r.island.floatForScreen((el) => [...buttons.values()].some((b) => b.contains(el)));
   if (r.mic) {
     r.audio = new AudioContext();
     r.an = r.audio.createAnalyser();

@@ -1183,6 +1183,99 @@ async function away() {
   } finally { b.close(); h.close(); }
 }
 
+// 16. a whole screen or a window is recorded (displaySurface "monitor" / "window"): the island on the page would be covered by other
+// programs, so it floats out into its own window by itself. A browser that wants a user action first refuses the window (the
+// click on "Record" went into the screen pick): then the first press on the island opens it. A tab recording keeps the island on
+// the page. The window is a fake: an off-screen iframe; gesture: it refuses like the browser without a user action
+async function pipOnScreen() {
+  const fake = (gesture) => `(() => {
+    window.__pip = null; window.__pipTries = 0;
+    Object.defineProperty(window, "documentPictureInPicture", { configurable: true, value: { requestWindow: async ({ width, height }) => {
+      window.__pipTries++;
+      if (${gesture} && !navigator.userActivation.isActive) throw new DOMException("needs a user action", "NotAllowedError");
+      const f = document.createElement("iframe");
+      f.id = "fakepip";
+      f.style.cssText = "position:fixed;left:-5000px;top:0;border:0;width:" + width + "px;height:" + height + "px";
+      document.body.append(f);
+      const w = f.contentWindow;
+      w.close = () => { f.remove(); };
+      window.__pip = w;
+      return w;
+    } } });
+  })()`;
+  const note = "document.querySelector('.vfd-away')";
+  const inPip = "!!window.__pip && !!window.__pip.document.querySelector('.vfd-root')";
+  const run = async (query, gesture, body) => {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, query);
+      await view(b);
+      await b.ev(fake(gesture));
+      await body(b, h);
+    } finally { b.close(); h.close(); }
+  };
+  const stopped = async (b, h, label) => {
+    await sleep(2000);   // some footage first: a recording stopped at once has nothing to send
+    await b.ev("(window.__pip?.document.querySelector('.vfd-rec') || document.querySelector('.vfd-rec')).click()");
+    await until(() => h.sends.length, `${label}: the recording is sent`, 60000);
+    await until(async () => !(await phase(b)), `${label}: the recording stopped`, 20000);
+    check(await b.ev("!document.getElementById('fakepip')"), `${label}: the window is closed with the recording`);
+    check(await b.ev(`!${note} && !document.querySelector('.vfd-root')?.checkVisibility?.()`), `${label}: no note, no island on the page`);
+  };
+  // a whole screen, the browser allows the window: it floats out without a click
+  await run("?bg=light&surface=monitor", false, async (b, h) => {
+    await record(b, 0);
+    await until(() => b.ev(inPip), "monitor: the island floated out by itself", 10000);
+    check(await b.ev(`!!${note}`), "monitor: the page keeps the note with the way back");
+    check(await b.ev("!document.querySelector('.vfd-root')"), "monitor: the island is not on the page");
+    check(await phase(b) === "rec", "monitor: the recording goes on");
+    check(await b.ev("!!document.querySelector('.vf-draw')"), "monitor: the canvas stays on the page");
+    await stopped(b, h, "monitor");
+  });
+  // a window, the browser asks for a user action first: the first press on the island opens it
+  await run("?bg=light&surface=window", true, async (b, h) => {
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-island')"), "window: the island is on the page", 10000);
+    await sleep(1200);
+    check(await b.ev("window.__pipTries") >= 1 && !(await b.ev(inPip)), "window: the browser refused the window, the island waits on the page");
+    check(await b.ev(`!${note}`), "window: no note yet");
+    const [x, y] = await b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]; })()");
+    await mouse(b, "mousePressed", x, y);
+    await mouse(b, "mouseReleased", x, y);
+    await until(() => b.ev(inPip), "window: the first press on the island opened the window", 10000);
+    check(await b.ev(`!!${note}`), "window: the page keeps the note");
+    check(await phase(b) === "rec", "window: the recording goes on");
+    // closed by the person: the island is back on the page and stays there until they ask again
+    await b.ev("(() => { const w = window.__pip; w.close(); w.dispatchEvent(new Event('pagehide')); })()");
+    await until(() => b.ev(`!${note} && !!document.querySelector('.vfd-root')`), "window: closed by the person, the island is back", 10000);
+    const tries = await b.ev("window.__pipTries");
+    await sleep(800);
+    check(await b.ev("window.__pipTries") === tries && !(await b.ev(inPip)), "window: it does not float out again by itself");
+    await stopped(b, h, "window");
+  });
+  // a press elsewhere on the page does not open the window; the plugin's own button does not start a second recording
+  await run("?bg=light&surface=monitor", true, async (b, h) => {
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-island')"), "elsewhere: the island is on the page", 10000);
+    await sleep(800);
+    await mouse(b, "mousePressed", 5, 5);
+    await mouse(b, "mouseReleased", 5, 5);
+    await sleep(500);
+    check(!(await b.ev(inPip)), "elsewhere: a press outside the island and the plugin's buttons does nothing");
+    await stopped(b, h, "elsewhere");
+  });
+  // a tab: the island stays on the page (Element Capture leaves it out of the video)
+  await run("?bg=light&tab", false, async (b, h) => {
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-island')"), "tab: the island is on the page", 10000);
+    await sleep(1000);
+    check(await b.ev("window.__pipTries") === 0 && !(await b.ev(inPip)), "tab: no window is asked for");
+    await stopped(b, h, "tab");
+  });
+}
+
 const only = process.argv[2];
 // 13. the fullscreen button copies the one of the native video bar: the same video, paused on the same frame, shot once with the
 // native bar (no island yet) and once with ours (the island open, the native button off), on three widths in both themes; the
@@ -1250,7 +1343,7 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, smooth };
+const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
