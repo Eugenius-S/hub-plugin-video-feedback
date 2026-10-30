@@ -8,6 +8,13 @@
   --front-soft: color-mix(in oklch, var(--primary) 12%, transparent); }
 .t-dark { color-scheme: dark; --background: #1c1c20; --foreground: #f6f6f8; --card: #26262b; --muted: #2e2e34; --muted-foreground: #a0a0ab;
   --accent: #34343b; --border: #3a3a42; --input: #3a3a42; --primary: #8ea0ff; --ring: #8ea0ff; --outline-image: rgb(255 255 255 / .12); }
+/* ?theme=clean-light|clean-dark: the tokens of the Clean theme (kalimullin/hub-plugin-clean: clean.json, clean-dark.json and html.th-clean of clean.css) */
+.t-clean-light { color-scheme: light; --background: #fff; --foreground: #27272a; --card: #fff; --muted: #f1f1f3; --muted-2: #e6e6ea; --muted-foreground: #62626b;
+  --accent: #e9e9e9; --border: #e6e6ea; --input: #d4d4d9; --primary: #4f6cf6; --ring: #c9c9d0; --destructive: #ef4e4e; --outline-image: rgb(0 0 0 / .1); }
+.t-clean-dark { color-scheme: dark; --background: #1c1c1f; --foreground: #ececee; --card: #1c1c1f; --muted: #2a2a2e; --muted-2: #34343a; --muted-foreground: #a1a1aa;
+  --accent: #2a2a2e; --border: #2f2f34; --input: #3f3f46; --primary: #7d93ff; --ring: #52525b; --destructive: #f0565a; --outline-image: rgb(255 255 255 / .12); }
+.th-clean { --c-fill: light-dark(rgb(0 0 0 / 0.05), rgb(255 255 255 / 0.06)); --c-hover: light-dark(rgb(0 0 0 / 0.035), rgb(255 255 255 / 0.04));
+  --c-t1: light-dark(rgb(0 0 0 / 0.90), rgb(255 255 255 / 0.90)); --c-alert: light-dark(#ef4e4e, #cf3a3a); --front-soft: var(--muted); }
 :root { --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px;
   --radius: 8px; --radius-xs: 6px; --radius-sm: 4px; --radius-lg: 12px; --radius-xl: 16px; --ui-scale: 1.0667;
   --text-xs: calc(12px * var(--ui-scale)); --text-sm: calc(14px * var(--ui-scale)); --text-base: calc(15px * var(--ui-scale));
@@ -21,7 +28,9 @@ body { background: var(--background); color: var(--foreground); font-family: var
 // Harness page: a fake hub (post -> the test server), the screen is a canvas captureStream, the microphone is an oscillator.
 // hub.lang is undefined (the plugin shows English); a test sets window.__hub.lang to switch the language.
 const Q = new URLSearchParams(location.search);
-document.documentElement.classList.add(Q.get("theme") === "dark" ? "t-dark" : "t-light");
+const TH = Q.get("theme") || "light";
+document.documentElement.classList.add(TH === "dark" ? "t-dark" : TH.startsWith("clean") ? "t-" + TH : "t-light");
+if (TH.startsWith("clean")) document.documentElement.classList.add("th-clean", ...(TH === "clean-dark" ? ["th-clean-dark"] : []));
 // ?bg=light|dark|split: a still "screen" (white, black, or white on the left and black on the right) - the ink colour test
 navigator.mediaDevices.getDisplayMedia = async () => {
   const c = document.createElement("canvas");

@@ -37,8 +37,8 @@ function newHub(opts = {}) {
     const url = new URL(req.url, "http://x");
     if (req.method === "GET") {
       const file = url.pathname === "/" ? "tests/e2e/harness.html" : url.pathname.slice(1);
-      const full = path.join(ROOT, file);
-      if (!full.startsWith(ROOT) || !fs.existsSync(full)) { res.writeHead(404); return res.end(); }
+      const full = file === "style.css" && process.env.VF_CSS ? path.resolve(process.env.VF_CSS) : path.join(ROOT, file);   // VF_CSS: a stylesheet to compare against (before/after snapshots)
+      if ((!full.startsWith(ROOT) && !process.env.VF_CSS) || !fs.existsSync(full)) { res.writeHead(404); return res.end(); }
       const type = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" }[path.extname(full)] || "application/octet-stream";
       res.writeHead(200, { "Content-Type": type + "; charset=utf-8", "Cache-Control": "no-store" });
       return res.end(fs.readFileSync(full));
@@ -680,6 +680,52 @@ async function theme() {
   check(bgs.light === "rgb(255, 255, 255)", `light theme: light island (${bgs.light})`);
 }
 
+// 9b. the Clean theme: no blue (the accent colour of the hub) on the pen and trash buttons, the island, its popovers and the toast,
+// in the light and the dark Clean; before/after: VF_CSS=<old style.css>, the scenario then lists what turns blue
+async function cleanTheme() {
+  const scan = `(() => {
+    const blue = (c) => { const m = c.match(/rgba?\\(([\\d.]+)[ ,]+([\\d.]+)[ ,]+([\\d.]+)(?:[ ,/]+([\\d.]+))?/); if (!m) return false; const [r, g, b] = [+m[1], +m[2], +m[3]], a = m[4] === undefined ? 1 : +m[4]; return a > 0.05 && b > r + 30 && b > g + 15; };
+    const found = [];
+    for (const el of document.querySelectorAll(".vf-btn, .vf-pen, .vf-trash, .vfd-root, .vfd-root *, .vfd-pop, .vfd-pop *, .vfd-cpop, .vfd-cpop *, .vfd-toast, .vfd-toast *")) {
+      if (el.classList.contains("vfd-sw")) continue; // ready ink colours are the palette, blue by design
+      const cs = getComputedStyle(el);
+      for (const k of ["color", "backgroundColor", "borderTopColor", "outlineColor", "fill", "stroke"]) {
+        if (blue(cs[k])) found.push((el.className.baseVal ?? el.className) + " " + k + " " + cs[k]);
+      }
+      if (blue(cs.boxShadow.split(") ")[0] + ")")) found.push((el.className.baseVal ?? el.className) + " boxShadow " + cs.boxShadow);
+    }
+    return [...new Set(found)];
+  })()`;
+  for (const th of ["clean-light", "clean-dark"]) {
+    const h = newHub({ gallery: true });
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, `?theme=${th}&bg=light`);
+      await view(b);
+      await island(b, 0.5);
+      const btn = "document.querySelector('.vfd-btn[data-act=mg]')";
+      await until(() => b.ev(`!${btn}.hidden`), "the Motion Gallery icon appears", 20000);
+      const seen = {};
+      seen.closed = await b.ev(scan);
+      await tool(b, "pencil");
+      seen.pressed = await b.ev(scan);
+      await b.ev("document.querySelector('.vfd-color').click()");
+      await sleep(300);
+      seen.colour = await b.ev(scan);
+      await b.ev("document.querySelector('.vfd-color').click()");
+      await b.ev(`${btn}.click()`);
+      await until(() => b.ev("document.querySelectorAll('.vfd-card').length === 4"), "four cards in the popover");
+      seen.gallery = await b.ev(scan);
+      await b.ev("document.querySelector('.vfd-card').click()");
+      await until(() => b.ev("!!document.querySelector('.vfd-toast')"), "the toast");
+      seen.toast = await b.ev(scan);
+      const all = Object.entries(seen).flatMap(([state, list]) => list.map((x) => `${state}: ${x}`));
+      check(all.length === 0, `${th}: no blue on the island, the pen, the trash, the popovers and the toast (${all.join("; ")})`);
+    } finally { b.close(); h.close(); }
+  }
+}
+
 // 10. Motion Gallery installed: its icon is on the island; a card puts a tag at the moment of the click, the tag goes
 // into the message with its time, and Undo takes it back
 async function tagMg() {
@@ -886,7 +932,7 @@ async function shots() {
   if (!dir) throw new Error("VF_SHOTS is not set");
   fs.mkdirSync(dir, { recursive: true });
   const save = async (b, name) => fs.writeFileSync(`${dir}/${name}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
-  for (const th of ["light", "dark"]) {
+  for (const th of (process.env.VF_THEMES || "light,dark").split(",")) {
     const h = newHub();
     await h.listen();
     const b = await launch();
@@ -1412,7 +1458,7 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
+const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
