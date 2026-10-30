@@ -37,8 +37,8 @@ function newHub(opts = {}) {
     const url = new URL(req.url, "http://x");
     if (req.method === "GET") {
       const file = url.pathname === "/" ? "tests/e2e/harness.html" : url.pathname.slice(1);
-      const full = path.join(ROOT, file);
-      if (!full.startsWith(ROOT) || !fs.existsSync(full)) { res.writeHead(404); return res.end(); }
+      const full = file === "style.css" && process.env.VF_CSS ? path.resolve(process.env.VF_CSS) : path.join(ROOT, file);   // VF_CSS: a stylesheet to compare against (before/after snapshots)
+      if ((!full.startsWith(ROOT) && !process.env.VF_CSS) || !fs.existsSync(full)) { res.writeHead(404); return res.end(); }
       const type = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" }[path.extname(full)] || "application/octet-stream";
       res.writeHead(200, { "Content-Type": type + "; charset=utf-8", "Cache-Control": "no-store" });
       return res.end(fs.readFileSync(full));
@@ -127,6 +127,15 @@ const GALLERY = [
 ];
 
 // ───── Chrome over CDP ─────
+// VF_SHOT_DIR: a few snapshots of the full screen and the floating island, for showing (numbered in the order taken)
+let shotN = 0;
+const shotOf = async (b, name) => {
+  const dir = process.env.VF_SHOT_DIR;
+  if (!dir) return;
+  fs.mkdirSync(dir, { recursive: true });
+  await sleep(250);
+  fs.writeFileSync(`${dir}/${String(++shotN).padStart(2, "0")}-${name}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
+};
 async function launch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-chrome-"));   // a fresh profile: the cache of an old main.js does not interfere
   const mode = process.env.VF_HEADED ? ["--window-position=60,40", "--window-size=1296,800"] : ["--headless=new"];   // VF_HEADED: a real window with the GPU
@@ -173,6 +182,9 @@ const phase = (b) => b.ev("globalThis.__videoFeedback?.()?.phase || null");
 async function load(b, h, query = "") {
   await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/${query}` });
   await until(() => b.ev("window.__ready === true").catch(() => false), "the harness page");
+  // the island floats out into its own window at once where the browser has one: scenarios about the island on the page have
+  // none (the ones about the window put a fake in, see fakePip)
+  await b.ev("Object.defineProperty(window, 'documentPictureInPicture', { configurable: true, value: undefined }); 0");
 }
 
 async function record(b, seconds) {
@@ -341,12 +353,54 @@ async function drawTools() {
     await tool(b, "rect");
     await b.page("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
     check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === false, "Escape lets go of the tool");
+
+    // the right button lets go of the tool: on the canvas and on the pressed tool, with no context menu
+    const rclick = async (x, y) => {
+      await b.page("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "right", buttons: 2, clickCount: 1 });
+      await b.page("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "right", buttons: 0, clickCount: 1 });
+    };
+    await b.ev(`window.__ctx = 0; window.__ctxPrevented = null; addEventListener("contextmenu", (e) => { window.__ctx++; setTimeout(() => { window.__ctxPrevented = e.defaultPrevented; }); }, true)`);
+    await tool(b, "oval");
+    await rclick(600, 500);
+    check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')") === false, "a right click on the canvas lets go of the tool");
+    check(await b.ev("window.__ctxPrevented") === true, "the right click on the canvas opens no context menu");
+    await tool(b, "oval");
+    const at = await b.ev("(() => { const r = document.querySelector('.vfd-btn[data-tool=oval]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+    await rclick(...at);
+    check(await b.ev("document.querySelector('.vfd-btn[data-tool=oval]').getAttribute('aria-pressed')") === "false", "a right click on the pressed tool lets go of it");
+    check(await b.ev("window.__ctxPrevented") === true, "the right click on the tool opens no context menu");
+    check(await b.ev("/right/i.test(document.querySelector('.vfd-btn[data-tool=pencil]').dataset.tip)"), "the tool's tip says that a right click lets go");
+  } finally { b.close(); h.close(); }
+}
+
+// 6b. the bin on the island: before the stop button, only while recording, same as the page's own bin: stops and erases, sends nothing
+async function trashBtn() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    const bin = "document.querySelector('.vfd-trash')";
+    check(await b.ev(`!!${bin} && !${bin}.hidden && ${bin}.dataset.act === 'discard'`), "the bin is on the island while recording");
+    check(await b.ev(`${bin}.nextElementSibling === document.querySelector('.vfd-rec')`), "the bin sits right before the stop button, no divider between them");
+    check(await b.ev(`${bin}.dataset.tip`) === "Delete recording", "the bin's tip");
+    await tool(b, "line");
+    await drag(b, [100, 300], [300, 300]);
+    await sleep(1200);
+    await b.ev(`${bin}.click()`);
+    await until(async () => !(await phase(b)), "the bin stops the recording", 20000);
+    await sleep(500);
+    check(h.sends.length === 0, "the bin sends nothing to the hub");
+    check(await b.ev("!document.querySelector('.vfd-island')?.checkVisibility?.()"), "the bin closes the island");
+    check(await b.ev("!!document.querySelector('.vf-banner')"), "the bin shows the note that the recording is erased");
   } finally { b.close(); h.close(); }
 }
 
 // a screenshot of the page as the user sees it -> {w, h, px(x, y)}: 8-bit PNG from Chrome (RGB or RGBA, no interlace)
-async function shot(b) {
-  const png = Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64");
+async function shot(b, clip) {
+  const png = Buffer.from((await b.page("Page.captureScreenshot", { format: "png", ...(clip ? { clip } : {}) })).data, "base64");
   let w = 0, h = 0, bpp = 4, idat = [];
   for (let i = 8; i < png.length;) {
     const len = png.readUInt32BE(i), type = png.toString("latin1", i + 4, i + 8), body = png.subarray(i + 8, i + 8 + len);
@@ -364,7 +418,7 @@ async function shot(b) {
       out[y * row + x] = (src[x] + pred) & 255;
     }
   }
-  return { w, h, px: (x, y) => [...out.subarray(y * row + x * bpp, y * row + x * bpp + 3)] };
+  return { w, h, png, px: (x, y) => [...out.subarray(y * row + x * bpp, y * row + x * bpp + 3)] };
 }
 
 // 7. the ink: one colour for every tool, drawn as it is (no blending), so it shows the same on a white, a light grey and a black
@@ -413,8 +467,8 @@ async function ink() {
 }
 
 // 7b. the colour popover: a colour picked once goes to every tool, to the next stroke on the open canvas (earlier strokes keep
-// theirs), is remembered, and survives a reload; a broken stored value falls back to the default. The stroke has an edge of the
-// opposite lightness (dark round a light ink, light round a dark one), so it shows on any page
+// theirs), is remembered, and survives a reload; a broken stored value falls back to the default. The stroke is the picked colour as it is,
+// with no halo round it
 async function inkPick() {
   const h = newHub();
   await h.listen();
@@ -438,8 +492,8 @@ async function inkPick() {
     await tool(b, "line");
     await drag(b, [100, 300], [200, 300]);
     check(near(await pixel(b, 150, 300), [...DEFAULT_INK, 255], 2), "the first stroke has the default colour");
-    // the edge of a light ink is dark: the row just outside the 4 px core
-    { const e = await pixelNow(b, 150, 302); check(e[0] === 0 && e[1] === 0 && e[2] === 0 && e[3] > 60 && e[3] < 200, `a light ink has a dark edge (${e})`); }
+    // no halo: the row just outside the 4 px core is empty
+    { const e = await pixelNow(b, 150, 302); check(e[3] === 0, `a light ink has no halo (${e})`); }
     await toggle();
     check(await isOpen(), "a click on the colour button opens the popover");
     check(await b.ev("document.querySelector('.vfd-color').getAttribute('aria-expanded')") === "true", "aria-expanded is true");
@@ -468,7 +522,7 @@ async function inkPick() {
     check(near(await pixel(b, 150, 400), want, 2), "pencil: the new colour");
     check(near(await pixel(b, 100, 485), want, 2), "rectangle: the new colour");
     check(near(await pixel(b, 300, 485), want, 2), "oval: the new colour");
-    // a ready colour sets the ink and closes the popover; a dark ink has a light edge
+    // a ready colour sets the ink and closes the popover; no halo around it
     await toggle();
     await swatch("#1C1C1E");
     check(!(await isOpen()), "a ready colour closes the popover");
@@ -476,7 +530,7 @@ async function inkPick() {
     await tool(b, "line");
     await drag(b, [100, 560], [200, 560]);
     check(near(await pixel(b, 150, 560), [0x1c, 0x1c, 0x1e, 255], 2), "the black swatch draws black");
-    { const e = await pixelNow(b, 150, 562); check(e[0] === 255 && e[1] === 255 && e[2] === 255 && e[3] > 100, `a dark ink has a light edge (${e})`); }
+    { const e = await pixelNow(b, 150, 562); check(e[3] === 0, `a dark ink has no halo (${e})`); }
     // the square and the strip: a drag sets a colour, the popover stays
     await toggle();
     const sv = await b.ev("(() => { const r = document.querySelector('.vfd-sv').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()");
@@ -582,7 +636,7 @@ async function place() {
     await b.ev("window.__root.querySelector('.vf-pen').click()");
     check((await b.ev(at)).join() === left.join(), "closed and opened again: the same place");
     check(await b.ev("document.querySelectorAll('.vfd-btn[aria-pressed=true]').length") === 0, "the tool is not remembered");
-    await view(b, 420, 300);
+    await view(b, 580, 300);   // the island with the trash, the stop and the float buttons is about 540 px wide
     await sleep(300);
     const small = await b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return [r.right <= innerWidth, r.bottom <= innerHeight, r.left >= 0, r.top >= 0]; })()");
     check(small.every(Boolean), `a small window keeps the island on the screen (${small})`);
@@ -626,6 +680,52 @@ async function theme() {
   check(bgs.light === "rgb(255, 255, 255)", `light theme: light island (${bgs.light})`);
 }
 
+// 9b. the Clean theme: no blue (the accent colour of the hub) on the pen and trash buttons, the island, its popovers and the toast,
+// in the light and the dark Clean; before/after: VF_CSS=<old style.css>, the scenario then lists what turns blue
+async function cleanTheme() {
+  const scan = `(() => {
+    const blue = (c) => { const m = c.match(/rgba?\\(([\\d.]+)[ ,]+([\\d.]+)[ ,]+([\\d.]+)(?:[ ,/]+([\\d.]+))?/); if (!m) return false; const [r, g, b] = [+m[1], +m[2], +m[3]], a = m[4] === undefined ? 1 : +m[4]; return a > 0.05 && b > r + 30 && b > g + 15; };
+    const found = [];
+    for (const el of document.querySelectorAll(".vf-btn, .vf-pen, .vf-trash, .vfd-root, .vfd-root *, .vfd-pop, .vfd-pop *, .vfd-cpop, .vfd-cpop *, .vfd-toast, .vfd-toast *")) {
+      if (el.classList.contains("vfd-sw")) continue; // ready ink colours are the palette, blue by design
+      const cs = getComputedStyle(el);
+      for (const k of ["color", "backgroundColor", "borderTopColor", "outlineColor", "fill", "stroke"]) {
+        if (blue(cs[k])) found.push((el.className.baseVal ?? el.className) + " " + k + " " + cs[k]);
+      }
+      if (blue(cs.boxShadow.split(") ")[0] + ")")) found.push((el.className.baseVal ?? el.className) + " boxShadow " + cs.boxShadow);
+    }
+    return [...new Set(found)];
+  })()`;
+  for (const th of ["clean-light", "clean-dark"]) {
+    const h = newHub({ gallery: true });
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, `?theme=${th}&bg=light`);
+      await view(b);
+      await island(b, 0.5);
+      const btn = "document.querySelector('.vfd-btn[data-act=mg]')";
+      await until(() => b.ev(`!${btn}.hidden`), "the Motion Gallery icon appears", 20000);
+      const seen = {};
+      seen.closed = await b.ev(scan);
+      await tool(b, "pencil");
+      seen.pressed = await b.ev(scan);
+      await b.ev("document.querySelector('.vfd-color').click()");
+      await sleep(300);
+      seen.colour = await b.ev(scan);
+      await b.ev("document.querySelector('.vfd-color').click()");
+      await b.ev(`${btn}.click()`);
+      await until(() => b.ev("document.querySelectorAll('.vfd-card').length === 4"), "four cards in the popover");
+      seen.gallery = await b.ev(scan);
+      await b.ev("document.querySelector('.vfd-card').click()");
+      await until(() => b.ev("!!document.querySelector('.vfd-toast')"), "the toast");
+      seen.toast = await b.ev(scan);
+      const all = Object.entries(seen).flatMap(([state, list]) => list.map((x) => `${state}: ${x}`));
+      check(all.length === 0, `${th}: no blue on the island, the pen, the trash, the popovers and the toast (${all.join("; ")})`);
+    } finally { b.close(); h.close(); }
+  }
+}
+
 // 10. Motion Gallery installed: its icon is on the island; a card puts a tag at the moment of the click, the tag goes
 // into the message with its time, and Undo takes it back
 async function tagMg() {
@@ -638,6 +738,12 @@ async function tagMg() {
     await island(b, 0.5);
     const btn = "document.querySelector('.vfd-btn[data-act=mg]')";
     await until(() => b.ev(`!${btn}.hidden`), "the Motion Gallery icon appears (the gallery answered)", 20000);
+    // the hint of the icon sits under the island, not inside it and not under it (z-order), and stays on the screen
+    await b.ev(`${btn}.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }))`);
+    const tipBox = await b.ev(`(() => { const t = document.querySelector(".vfd-tip"); if (!t) return null; const a = t.getBoundingClientRect(), r = document.querySelector(".vfd-root .vfd-island").getBoundingClientRect(); return { top: a.top, bottom: a.bottom, left: a.left, right: a.right, islandBottom: r.bottom, vw: innerWidth, vh: innerHeight, text: t.textContent }; })()`);
+    check(!!tipBox, "the hint of the Motion Gallery icon is shown");
+    check(tipBox.top >= tipBox.islandBottom && tipBox.left >= 0 && tipBox.right <= tipBox.vw && tipBox.bottom <= tipBox.vh, `the hint is under the island and on the screen (${JSON.stringify(tipBox)})`);
+    await b.ev(`${btn}.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }))`);
     await b.ev(`${btn}.click()`);
     await until(() => b.ev("document.querySelectorAll('.vfd-card').length === 4"), "four cards in the popover");
     check(await b.ev(`${btn}.getAttribute('aria-expanded')`) === "true", "the icon is pressed while the popover is open");
@@ -710,7 +816,8 @@ async function smooth() {
   const out = {};
   try {
     await load(b, h, `?bg=light&pulse&screen=${process.env.VF_PERF_SCREEN || "2560x1440"}`);
-    if (!process.env.VF_HEADED) await b.page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: dsf, mobile: false });
+    const [PW, PH] = (process.env.VF_PERF_PAGE || "1280x720").split("x").map(Number);   // VF_PERF_PAGE=3440x1440: a page as big as a wide monitor
+    if (!process.env.VF_HEADED) await b.page("Emulation.setDeviceMetricsOverride", { width: PW, height: PH, deviceScaleFactor: dsf, mobile: false });
     out._run = { label: process.env.VF_LABEL || "", headed: !!process.env.VF_HEADED, dsf, throttle: Number(process.env.VF_PERF_THROTTLE) || 1,
       screen: process.env.VF_PERF_SCREEN || "2560x1440", page: await b.ev("[innerWidth, innerHeight, devicePixelRatio].join('x')"), ua: await b.ev("navigator.userAgent") };
     if (process.env.VF_PERF_THROTTLE) await b.page("Emulation.setCPUThrottlingRate", { rate: Number(process.env.VF_PERF_THROTTLE) });
@@ -760,6 +867,15 @@ async function smooth() {
         await path(pts, 2000);
         await mouse(b, "mouseReleased", pts[pts.length - 1][0], pts[pts.length - 1][1]);
       }
+    });
+    // one long curve across the whole page: the stroke keeps growing, a real hand on a big monitor
+    await measure("long", async () => {
+      await tool(b, "pencil");
+      const n = 900, pts = Array.from({ length: n }, (_, i) => [60 + ((PW - 120) * i) / n, PH / 2 + (PH / 3) * Math.sin(i / 45) * Math.cos(i / 170)]);
+      await mouse(b, "mouseMoved", pts[0][0], pts[0][1]);
+      await mouse(b, "mousePressed", pts[0][0], pts[0][1]);
+      await path(pts, 4000);
+      await mouse(b, "mouseReleased", pts[n - 1][0], pts[n - 1][1]);
     });
     await measure("shapes", async () => {
       for (const id of ["rect", "oval", "line"]) {
@@ -816,7 +932,7 @@ async function shots() {
   if (!dir) throw new Error("VF_SHOTS is not set");
   fs.mkdirSync(dir, { recursive: true });
   const save = async (b, name) => fs.writeFileSync(`${dir}/${name}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
-  for (const th of ["light", "dark"]) {
+  for (const th of (process.env.VF_THEMES || "light,dark").split(",")) {
     const h = newHub();
     await h.listen();
     const b = await launch();
@@ -860,8 +976,489 @@ async function shots() {
   }
 }
 
+// 11. full screen: the island and the canvas move into the fullscreen element (the rest of the page is inert there), the island
+// still takes the mouse and the canvas still draws; a video or an iframe cannot hold children, so there they stay on the page.
+// The island also has a stop button while a recording runs
+async function fullscreen() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  const gesture = (expr) => b.page("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true });
+  const enter = async (id) => {
+    const r = await gesture(`document.${id === "html" ? "documentElement" : `getElementById("${id}")`}.requestFullscreen().then(() => "ok", (e) => String(e))`);
+    check(r.result.value === "ok", `${id}: full screen entered (${r.result.value})`);
+    await until(() => b.ev("!!document.fullscreenElement"), `${id}: fullscreenElement is set`, 10000);
+    await sleep(500);
+  };
+  const leave = async () => {
+    await gesture("document.exitFullscreen().then(() => 1)");
+    await until(() => b.ev("!document.fullscreenElement"), "full screen left", 10000);
+    await sleep(500);
+  };
+  const where = () => b.ev("({ root: document.querySelector('.vfd-root').parentElement.localName + '#' + document.querySelector('.vfd-root').parentElement.id, canvas: document.querySelector('.vf-draw').parentElement.localName + '#' + document.querySelector('.vf-draw').parentElement.id })");
+  const gripAt = () => b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+  const gripHit = () => b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!e && !!e.closest('.vfd-island'); })()");
+  const inView = () => b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return r.width > 0 && r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()");
+  try {
+    await load(b, h, `?bg=light&fs${process.env.VF_THEME ? "&theme=" + process.env.VF_THEME : ""}`);   // VF_THEME: for the snapshots in the dark theme
+    await view(b);
+    await island(b, 0.3);
+    // the stop button: only while recording, with the time of the hub's own button
+    const stopBtn = "document.querySelector('.vfd-rec')";
+    check(await b.ev(`!${stopBtn}.hidden && /^\\d+:\\d\\d$/.test(${stopBtn}.querySelector('.vf-time').textContent)`), "the stop button is on the island with the time");
+    check(await b.ev(`${stopBtn}.nextElementSibling.classList.contains('vfd-sep') && !${stopBtn}.previousElementSibling.classList.contains('vfd-sep')`), "the stop button has a divider only after it, none before (the bin is its neighbour)");
+    await tool(b, "pencil");
+    await drag(b, [100, 300], [200, 300]);
+    check(near(await pixel(b, 150, 300), [...DEFAULT_INK, 255], 2), "a stroke on the page before full screen");
+
+    // the whole page
+    await enter("html");
+    check(await b.ev("document.querySelector('.vfd-root').parentElement === document.documentElement"), "the whole page: the island stays outside <body>");
+    check(await gripHit(), "the whole page: the island takes the mouse");
+    await tool(b, "line");
+    await drag(b, [100, 400], [200, 400]);
+    check(near(await pixel(b, 150, 400), [...DEFAULT_INK, 255], 2), "the whole page: the canvas draws");
+    await leave();
+
+    // a block
+    await enter("fsbox");
+    check(await b.ev("document.fullscreenElement.id") === "fsbox", "the block is the fullscreen element");
+    let w = await where();
+    check(w.root === "div#fsbox" && w.canvas === "div#fsbox", `a block: the island and the canvas are inside it (${JSON.stringify(w)})`);
+    check(await inView(), "a block: the island is on the screen");
+    check(await gripHit(), "a block: the island takes the mouse");
+    const before = await gripAt();
+    await drag(b, before, [before[0] + 150, before[1] + 120]);
+    const after = await gripAt();
+    check(Math.abs(after[0] - before[0] - 150) < 10 && Math.abs(after[1] - before[1] - 120) < 10, `a block: the grip drags the island (${before} → ${after})`);
+    await tool(b, "pencil");   // another tool than before: a second click on the same one would put it down
+    await drag(b, [100, 250], [200, 250]);
+    check(near(await pixel(b, 150, 250), [...DEFAULT_INK, 255], 2), "a block: the canvas draws");
+    await b.ev("document.querySelector('.vfd-color').click()");
+    await sleep(300);
+    check(await b.ev("(() => { const r = document.querySelector('.vfd-sw').getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!e && !!e.closest('.vfd-cpop'); })()"), "a block: the colour popover is on the screen and takes the mouse");
+    await b.ev("document.querySelector('.vfd-color').click()");
+    await leave();
+    w = await where();
+    check(w.root === "html#" && w.canvas === "body#", `full screen left: back on the page (${JSON.stringify(w)})`);
+    check(await inView(), "full screen left: the island is on the screen");
+
+    // in full screen the island grows with the interface: scale = height / 900 within 1..1.5, only in full screen
+    check(!(await b.ev("document.querySelector('.vfd-root').style.transform")).includes("scale"), "outside full screen the island is not scaled");
+    await view(b, 1400, 1350);
+    await sleep(300);
+    await enter("fsbox");
+    check((await b.ev("document.querySelector('.vfd-root').style.transform")).endsWith("scale(1.5)"), "full screen at 1350 px: the island is scaled 1.5");
+    check(await b.ev("(() => { const r = document.querySelector('.vfd-root'), i = document.querySelector('.vfd-island').getBoundingClientRect(); return Math.abs(i.width - r.offsetWidth * 1.5) < 2; })()"), "the island is drawn 1.5 times bigger");
+    check(await inView(), "the scaled island is on the screen");
+    await shotOf(b, "fullscreen-island-scaled");
+    check(await gripHit(), "the scaled island takes the mouse");
+    await leave();
+    check(!(await b.ev("document.querySelector('.vfd-root').style.transform")).includes("scale"), "full screen left: the island is not scaled again");
+    await view(b);
+    await sleep(300);
+
+    // a video and an image cannot hold the island: the player's own fullscreen button cannot be taken over after the fact (the browser
+    // wants a fresh click for a second fullscreen element), so while the island is open the native button is off and our own sits on
+    // the video; the same box opens by a double click and by a script's requestFullscreen(). It holds a copy, the island and the canvas
+    const fsBtn = "document.querySelector('.vfd-fs')";
+    const vidCenter = () => b.ev("(() => { const r = document.getElementById('fsvid').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+    const btnCenter = () => b.ev(`(() => { const r = ${fsBtn}.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const click = async ([x, y], n = 1) => {
+      await mouse(b, "mouseMoved", x, y);
+      for (let i = 1; i <= n; i++) {
+        await b.page("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: i });
+        await b.page("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: i });
+      }
+    };
+    let drawn = 0;
+    const inViewer = async (id) => {
+      await until(() => b.ev("document.fullscreenElement?.classList.contains('vfd-viewer')"), `${id}: our viewer box is the fullscreen element`, 10000);
+      await sleep(400);
+      w = await where();
+      check(w.root === "div#" && w.canvas === "div#", `${id}: the island and the canvas are inside the viewer (${JSON.stringify(w)})`);
+      check(await b.ev("document.querySelector('.vfd-viewer-media').localName") === (id.startsWith("fsimg") ? "img" : "video"), `${id}: the viewer holds a copy`);
+      check(await inView(), `${id}: the island is on the screen`);
+      check(await gripHit(), `${id}: the island takes the mouse`);
+      if (!await b.ev("document.querySelector('.vfd-btn[aria-pressed=true][data-tool]')")) await tool(b, "line");   // a second click on the same tool would put it down
+      const row = 500 + 10 * (++drawn);
+      await drag(b, [100, row], [220, row]);
+      check(near(await pixel(b, 160, row), [...DEFAULT_INK, 255], 2), `${id}: the canvas draws over the viewer`);
+      check(await phase(b) === "rec", `${id}: the recording goes on`);
+      if (drawn === 1) await shotOf(b, "fullscreen-island-and-stroke");
+    };
+    const back = async (id) => {
+      w = await where();
+      check(w.root === "html#" && w.canvas === "body#", `${id}: left: back on the page (${JSON.stringify(w)})`);
+      check(await b.ev("!document.querySelector('.vfd-viewer')"), `${id}: our box is gone`);
+      check(await inView(), `${id}: left: the island is on the screen`);
+    };
+
+    check(await b.ev("document.getElementById('fsvid').controlsList.contains('nofullscreen')"), "fsvid: the native fullscreen button is off while the island is open");
+    await mouse(b, "mouseMoved", ...(await vidCenter()));
+    await until(() => b.ev(`!${fsBtn}.hidden`), "fsvid: our fullscreen button shows on the video", 5000);
+
+    // 1) our button
+    await click(await btnCenter());
+    await inViewer("fsvid");
+    check(await b.ev("document.getElementById('fsvid').paused"), "the original video is paused while the copy is shown");
+    check(await b.ev("document.querySelector('.vfd-viewer-media').controlsList.contains('nofullscreen')"), "fsvid: the copy has no native fullscreen button either");
+    // the same button leaves
+    await mouse(b, "mouseMoved", 5, 5);
+    await mouse(b, "mouseMoved", ...(await b.ev("(() => { const r = document.querySelector('.vfd-viewer-media').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")));
+    await until(() => b.ev(`!${fsBtn}.hidden`), "fsvid: the button shows on the copy", 5000);
+    // the button stands where the native one stood: circle 48 (icon 36); centre 72/48 from the corner up to 1440 px of the window, 112/56 over it (the browser's bar grows)
+    const fsGeo = () => b.ev(`(() => { const m = document.querySelector('.vfd-viewer-media').getBoundingClientRect(), r = ${fsBtn}.getBoundingClientRect(); return [Math.round(r.width), Math.round(m.right - (r.x + r.width / 2)), Math.round(m.bottom - (r.y + r.height / 2))]; })()`);
+    check(JSON.stringify(await fsGeo()) === "[48,72,48]", `fsvid: the leave button is 48 px, 72/48 from the corner (${await fsGeo()})`);
+    await click(await btnCenter());
+    await until(() => b.ev("!document.fullscreenElement"), "fsvid: the button leaves full screen", 10000);
+    await sleep(500);
+    await back("fsvid");
+
+    // 2) a double click on the video
+    // with a tool in hand a double click belongs to the drawing: put it down, so that the video gets the mouse
+    const topAtVideo = async () => { const [x, y] = await vidCenter(); return b.ev(`document.elementFromPoint(${x}, ${y}).localName`); };
+    if (await topAtVideo() !== "video") await b.ev("document.querySelector('.vfd-btn[aria-pressed=true][data-tool]')?.click()");
+    check(await topAtVideo() === "video", "fsvid: with no tool the video takes the mouse");
+    await click(await vidCenter(), 2);
+    await inViewer("fsvid (double click)");
+    await leave();
+    await back("fsvid (double click)");
+
+    // 3) a script (or the page's own button) asks for fullscreen on the video or the image: the same box
+    for (const id of ["fsvid", "fsimg"]) {
+      await enter(id);
+      await inViewer(`${id} (script)`);
+      await leave();
+      await back(`${id} (script)`);
+    }
+
+    // a window wider than 1440 px: the browser's bar is bigger, so is our button
+    await view(b, 1600, 900);
+    await sleep(300);
+    await enter("fsvid");
+    await until(() => b.ev("document.fullscreenElement?.classList.contains('vfd-viewer')"), "wide: the viewer is the fullscreen element", 10000);
+    await mouse(b, "mouseMoved", 5, 5);
+    await mouse(b, "mouseMoved", ...(await b.ev("(() => { const r = document.querySelector('.vfd-viewer-media').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")));
+    await until(() => b.ev(`!${fsBtn}.hidden`), "wide: the button shows on the copy", 5000);
+    check(JSON.stringify(await fsGeo()) === "[48,112,56]", `wide: the leave button is 48 px, 112/56 from the corner (${await fsGeo()})`);
+    check(await b.ev(`Math.round(${fsBtn}.querySelector('.vfd-i, svg').getBoundingClientRect().width)`) === 36, "wide: the icon in it is 36 px");
+    await leave();
+    await back("wide");
+    await view(b);
+    await sleep(300);
+
+    // an iframe cannot be copied: it stays in its own fullscreen, the island stays on the page (it floats out in a browser with
+    // Picture-in-Picture for documents, which headless Chrome has not), nothing breaks
+    await enter("fsifr");
+    w = await where();
+    check(w.root === "html#" && w.canvas === "body#", "fsifr: no children possible, the island stays on the page");
+    check(await phase(b) === "rec", "fsifr: the recording goes on");
+    await leave();
+
+    // F11: the window gets big without a fullscreen element
+    await view(b, 1600, 900);
+    await sleep(300);
+    check(await inView(), "a bigger window: the island is on the screen");
+    check(await b.ev("document.querySelector('.vf-draw').width >= 1600"), "a bigger window: the canvas follows");
+
+    // the stop button stops and sends, the island goes away
+    await b.ev(`${stopBtn}.click()`);
+    await until(() => h.sends.length, "the recording is sent after the stop button", 60000);
+    await until(async () => !(await phase(b)), "the recording stopped", 20000);
+    check(await b.ev("!document.querySelector('.vfd-island')?.checkVisibility?.()"), "the stop button closes the island");
+    check(await b.ev("!document.getElementById('fsvid').controlsList.contains('nofullscreen') && !document.getElementById('fsvid').hasAttribute('data-vfd-fs') && !document.querySelector('.vfd-fs')"), "closing the island gives the native fullscreen button back");
+  } finally { b.close(); h.close(); }
+}
+
+// a fake Document Picture-in-Picture: an off-screen iframe stands in for the window (headless Chrome has no such API).
+// gesture: it refuses like a browser without a user action
+const fakePip = (gesture) => `(() => {
+  window.__pip = null; window.__pipTries = 0;
+  Object.defineProperty(window, "documentPictureInPicture", { configurable: true, value: { requestWindow: async ({ width, height }) => {
+    window.__pipTries++;
+    if (${gesture} && !navigator.userActivation.isActive) throw new DOMException("needs a user action", "NotAllowedError");
+    const f = document.createElement("iframe");
+    f.id = "fakepip";
+    f.style.cssText = "position:fixed;left:-5000px;top:0;border:0;width:" + width + "px;height:" + height + "px";
+    document.body.append(f);
+    const w = f.contentWindow;
+    w.close = () => { f.remove(); };
+    // the geometry of a real window: a frame around the page, a screen (the page's viewport) it cannot leave, a resize that
+    // keeps the top left, and a browser that pushes a window back onto the screen when it grows past an edge
+    const CH = { w: 0, h: 32 }, SW = innerWidth, SH = innerHeight;
+    const g = { x: 0, y: 0, w: width + CH.w, h: height + CH.h };
+    const clamp = () => { g.x = Math.max(0, Math.min(g.x, SW - g.w)); g.y = Math.max(0, Math.min(g.y, SH - g.h)); };
+    const apply = () => {
+      f.style.width = (g.w - CH.w) + "px"; f.style.height = (g.h - CH.h) + "px";
+      if (window.__pipVisible) { f.style.left = g.x + "px"; f.style.top = g.y + "px"; f.style.zIndex = 2147483647; f.style.boxShadow = "0 8px 32px #0006"; }
+    };
+    g.x = SW - g.w - 20; g.y = SH - g.h - 20;
+    const get = (k, v) => Object.defineProperty(w, k, { configurable: true, get: v });
+    get("screenX", () => g.x); get("screenY", () => g.y); get("outerWidth", () => g.w); get("outerHeight", () => g.h);
+    get("innerWidth", () => g.w - CH.w); get("innerHeight", () => g.h - CH.h);
+    get("screen", () => ({ availLeft: 0, availTop: 0, availWidth: SW, availHeight: SH }));
+    Object.defineProperty(w, "resizeTo", { configurable: true, value: (nw, nh) => { g.w = nw; g.h = nh; clamp(); apply(); } });
+    Object.defineProperty(w, "moveTo", { configurable: true, value: (x, y) => { g.x = x; g.y = y; clamp(); apply(); } });
+    window.__pipGeo = () => ({ x: g.x, y: g.y, w: g.w, h: g.h, right: g.x + g.w, bottom: g.y + g.h });
+    window.__pipPlace = (x, y) => { g.x = x; g.y = y; clamp(); apply(); };
+    window.__pip = w;
+    return w;
+  } } });
+})()`;
+const inPip = "!!window.__pip && !!window.__pip.document.querySelector('.vfd-root')";
+const noStrip = "document.querySelectorAll('[class*=vfd-away]').length === 0";
+
+// 12. the island opens in its own window at once, for any recording: the window is as big as the panel, the page keeps nothing
+// of it (no note, no way back), closing the window closes the island and the recording goes on, the pen button on the page
+// brings it back, the stop button works from the window
+async function away() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window by itself", 10000);
+    await sleep(300);
+    check(await b.ev(noStrip), "no note on the page");
+    check(await b.ev("!document.querySelector('.vfd-root')"), "the island is not on the page");
+    check(await b.ev("window.__pip.document.documentElement.classList.contains('vfd-pip-doc') && !!window.__pip.document.querySelector('.vfd-root.vfd-pip')"), "the window has the island in its floating form");
+    check(await b.ev("window.__pip.document.querySelector('.vfd-btn[data-act=pip]').hidden"), "no way back is offered in the window");
+    check(await b.ev("(() => { const d = window.__pip.document; return d.querySelector('.vfd-trash').nextElementSibling === d.querySelector('.vfd-rec'); })()"), "no divider between the bin and the stop button");
+    // the window is exactly the panel: no empty space around it
+    const [fw, fh, pw, ph, pl, pt] = await b.ev(`(() => { const f = document.getElementById('fakepip'); const r = window.__pip.document.querySelector('.vfd-island').getBoundingClientRect(); return [f.clientWidth, f.clientHeight, r.width, r.height, r.left, r.top]; })()`);
+    check(Math.abs(fw - pw) <= 1.5 && Math.abs(fh - ph) <= 1.5 && pl <= 1 && pt <= 1, `the window is the size of the panel (window ${fw}x${fh}, panel ${pw.toFixed(1)}x${ph.toFixed(1)} at ${pl.toFixed(1)},${pt.toFixed(1)})`);
+    check(await phase(b) === "rec", "the recording goes on while the island is in the window");
+    check(await b.ev("!!document.querySelector('.vf-draw')"), "the canvas stays on the page");
+    if (process.env.VF_SHOT_DIR) {   // the fake window sits off the screen: bring it on for the snapshot
+      await b.ev("document.getElementById('fakepip').style.cssText += ';left:40px;top:160px;z-index:2147483647;box-shadow:0 8px 32px #0006'");
+      await shotOf(b, "island-in-its-own-window");
+      await b.ev("document.getElementById('fakepip').style.left = '-5000px'");
+    }
+    // closing the window closes the island, the recording goes on
+    await b.ev("(() => { const w = window.__pip; w.close(); w.dispatchEvent(new Event('pagehide')); })()");
+    await until(() => b.ev("globalThis.__videoFeedback().island.isOpen() === false"), "closing the window closed the island", 10000);
+    check(await b.ev("!document.getElementById('fakepip') && !document.querySelector('.vfd-root')"), "no window, no island on the page");
+    check(await b.ev(noStrip), "still no note on the page");
+    check(await phase(b) === "rec", "the recording goes on after the window is closed");
+    // the pen button on the page brings it back, into a window again
+    const pen = "window.__root.querySelector('.vf-pen')";
+    await until(() => b.ev(`!${pen}.hidden`), "the pen button appears");
+    await b.ev(`${pen}.click()`);
+    await until(() => b.ev(inPip), "the pen brought the island back into a window", 10000);
+    // and the stop button works from the window
+    await b.ev("window.__pip.document.querySelector('.vfd-rec').click()");
+    await until(() => h.sends.length, "the recording is sent from the window's stop button", 60000);
+    await until(async () => !(await phase(b)), "the recording stopped", 20000);
+    check(await b.ev("!document.getElementById('fakepip') && !document.querySelector('.vfd-root')?.checkVisibility?.()"), "after the stop: no window, no island");
+  } finally { b.close(); h.close(); }
+}
+
+// 17. Motion Gallery in the island's window: the gallery has its own cross (the island's cross, repeated), closing it brings the
+// window back to its size, and the screen corner the window is pressed to stays where it was while it grows and shrinks
+async function galleryClose() {
+  const h = newHub({ gallery: true });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    const mg = "window.__pip.document.querySelector('.vfd-btn[data-act=mg]')";
+    await until(() => b.ev(`!${mg}.hidden`), "the Motion Gallery icon appears in the window", 20000);
+    await b.ev("window.__pipVisible = true; 0");
+    const geo = () => b.ev("window.__pipGeo()");
+    const near = (a, c) => Math.abs(a - c) <= 1;
+    const corners = [["bottom right", "br", 10000, 10000], ["top left", "tl", 0, 0], ["bottom left", "bl", 0, 10000], ["top right", "tr", 10000, 0]];
+    // the stand-in window starts at the size measured on the page, and the real one is fitted to its content on the first change: open and
+    // close the gallery once, so that every corner starts from the settled size
+    await b.ev(`${mg}.click()`);
+    await until(() => b.ev("window.__pip.document.querySelectorAll('.vfd-card').length === 4"), "the gallery opens once to settle the window");
+    await b.ev("window.__pip.document.querySelector('.vfd-pop .vfd-pop-x').click()");
+    await until(() => b.ev("!window.__pip.document.querySelector('.vfd-pop')"), "the gallery closes after the settling");
+    await sleep(200);
+    for (const [name, corner, x, y] of corners) {
+      await b.ev(`window.__pipPlace(${x}, ${y}); 0`);
+      const before = await geo();
+      await shotOf(b, `gallery-${corner}-before`);
+      await b.ev(`${mg}.click()`);
+      await until(() => b.ev("window.__pip.document.querySelectorAll('.vfd-card').length === 4"), `${name}: the gallery opens in the window`);
+      await sleep(200);
+      const open = await geo();
+      check(open.h > before.h, `${name}: the window grew for the gallery (${before.h} -> ${open.h})`);
+      const edgeX = corner.endsWith("r") ? "right" : "x", edgeY = corner.startsWith("b") ? "bottom" : "y";
+      check(near(open[edgeX], before[edgeX]) && near(open[edgeY], before[edgeY]), `${name}: the corner stays where it was while the window grows (${JSON.stringify(before)} -> ${JSON.stringify(open)})`);
+      check(await b.ev("(() => { const w = window.__pip; const r = w.document.querySelector('.vfd-pop').getBoundingClientRect(); return r.bottom <= w.innerHeight + 1 && r.right <= w.innerWidth + 1 && r.left >= -1 && r.top >= -1; })()"), `${name}: the gallery is inside the window`);
+      await shotOf(b, `gallery-${corner}-open`);
+      // the cross: the island's own button, with the island's own icon
+      const cross = await b.ev(`(() => { const d = window.__pip.document; const x = d.querySelector('.vfd-pop .vfd-pop-x'); const own = d.querySelector('.vfd-btn[data-act=close]'); if (!x || !own) return null; const a = x.getBoundingClientRect(), p = d.querySelector('.vfd-pop').getBoundingClientRect(); return { cls: x.classList.contains('vfd-btn'), same: x.innerHTML === own.innerHTML, label: x.getAttribute('aria-label') || '', w: a.width, h: a.height, inside: a.left >= p.left && a.right <= p.right && a.top >= p.top && a.bottom <= p.bottom }; })()`);
+      check(!!cross && cross.cls && cross.same && cross.inside, `${name}: the gallery has the island's own cross (${JSON.stringify(cross)})`);
+      check(!!cross && /Motion Gallery/.test(cross.label), `${name}: the cross says what it closes (${cross && cross.label})`);
+      await b.ev("window.__pip.document.querySelector('.vfd-pop .vfd-pop-x').click()");
+      await until(() => b.ev("!window.__pip.document.querySelector('.vfd-pop')"), `${name}: the cross closes the gallery`);
+      await sleep(200);
+      const after = await geo();
+      check(near(after.w, before.w) && near(after.h, before.h), `${name}: the window shrinks back (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
+      check(near(after.x, before.x) && near(after.y, before.y), `${name}: the window is where it was, no jump (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
+      check(await b.ev(`window.__pip.document.activeElement === ${mg} && ${mg}.getAttribute('aria-expanded') === 'false'`), `${name}: the focus is back on the gallery icon`);
+      await shotOf(b, `gallery-${corner}-after`);
+    }
+    // Esc is the second way out: the window comes back the same way
+    await b.ev("window.__pipPlace(10000, 10000); 0");
+    const before = await geo();
+    await b.ev(`${mg}.click()`);
+    await until(() => b.ev("!!window.__pip.document.querySelector('.vfd-pop')"), "the gallery opens again");
+    await b.ev("window.__pip.document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 0");
+    await until(() => b.ev("!window.__pip.document.querySelector('.vfd-pop')"), "Esc closes the gallery");
+    await sleep(200);
+    const after = await geo();
+    check(near(after.x, before.x) && near(after.y, before.y) && near(after.h, before.h), `Esc: the window is back in place (${JSON.stringify(before)} -> ${JSON.stringify(after)})`);
+  } finally { b.close(); h.close(); }
+}
+
+// 16. the window for every kind of recording (a whole screen, a window, a tab). A browser that wants a user action first refuses
+// it (the click on "Record" went into the screen pick): then the first press on the island opens it. A window the person closed
+// is not opened again by itself. The window is a fake (see fakePip)
+async function pipOnScreen() {
+  const run = async (query, gesture, body) => {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, query);
+      await view(b);
+      await b.ev(fakePip(gesture));
+      await body(b, h);
+    } finally { b.close(); h.close(); }
+  };
+  const stopped = async (b, h, label) => {
+    await sleep(2000);   // some footage first: a recording stopped at once has nothing to send
+    await b.ev("(window.__pip?.document.querySelector('.vfd-rec') || document.querySelector('.vfd-rec') || window.__root.querySelector('.vf-btn')).click()");   // the island may be closed: then the plugin's own button stops
+    await until(() => h.sends.length, `${label}: the recording is sent`, 60000);
+    await until(async () => !(await phase(b)), `${label}: the recording stopped`, 20000);
+    check(await b.ev("!document.getElementById('fakepip')"), `${label}: the window is closed with the recording`);
+    check(await b.ev(`${noStrip} && !document.querySelector('.vfd-root')?.checkVisibility?.()`), `${label}: no note, no island on the page`);
+  };
+  // a whole screen and a tab, the browser allows the window: it opens without a click
+  for (const surface of ["surface=monitor", "tab"]) {
+    await run(`?bg=light&${surface}`, false, async (b, h) => {
+      await record(b, 0);
+      await until(() => b.ev(inPip), `${surface}: the island is in its own window by itself`, 10000);
+      check(await b.ev(`${noStrip} && !document.querySelector('.vfd-root')`), `${surface}: no note, the island is not on the page`);
+      check(await phase(b) === "rec", `${surface}: the recording goes on`);
+      check(await b.ev("!!document.querySelector('.vf-draw')"), `${surface}: the canvas stays on the page`);
+      await stopped(b, h, surface);
+    });
+  }
+  // a window, the browser asks for a user action first: the first press on the island opens it
+  await run("?bg=light&surface=window", true, async (b, h) => {
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-island')"), "window: the island waits on the page", 10000);
+    await sleep(1200);
+    check(await b.ev("window.__pipTries") >= 1 && !(await b.ev(inPip)), "window: the browser refused the window, the island waits on the page");
+    check(await b.ev(noStrip), "window: no note");
+    const [x, y] = await b.ev("(() => { const r = document.querySelector('.vfd-grip').getBoundingClientRect(); return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]; })()");
+    await mouse(b, "mousePressed", x, y);
+    await mouse(b, "mouseReleased", x, y);
+    await until(() => b.ev(inPip), "window: the first press on the island opened the window", 10000);
+    check(await b.ev(noStrip), "window: still no note");
+    check(await phase(b) === "rec", "window: the recording goes on");
+    // closed by the person: the island is closed, not back on the page, and it does not float out again by itself
+    await b.ev("(() => { const w = window.__pip; w.close(); w.dispatchEvent(new Event('pagehide')); })()");
+    await until(() => b.ev("globalThis.__videoFeedback().island.isOpen() === false"), "window: closed by the person, the island is closed", 10000);
+    check(await b.ev("!document.querySelector('.vfd-root')"), "window: the island is not on the page");
+    const tries = await b.ev("window.__pipTries");
+    await sleep(800);
+    check(await b.ev("window.__pipTries") === tries && !(await b.ev(inPip)), "window: it does not open again by itself");
+    check(await phase(b) === "rec", "window: the recording goes on after closing");
+    await stopped(b, h, "window");
+  });
+  // a press elsewhere on the page does not open the window
+  await run("?bg=light&surface=monitor", true, async (b, h) => {
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-island')"), "elsewhere: the island is on the page", 10000);
+    await sleep(800);
+    await mouse(b, "mousePressed", 5, 5);
+    await mouse(b, "mouseReleased", 5, 5);
+    await sleep(500);
+    check(!(await b.ev(inPip)), "elsewhere: a press outside the island and the plugin's buttons does nothing");
+    await stopped(b, h, "elsewhere");
+  });
+}
+
 const only = process.argv[2];
-const cases = { normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, tagMg, noGallery, confine, smooth };
+// 13. the fullscreen button copies the one of the native video bar: the same video, paused on the same frame, shot once with the
+// native bar (no island yet) and once with ours (the island open, the native button off), on three widths in both themes; the
+// button and its hover disc are compared pixel by pixel. VF_SHOT_DIR keeps both snapshots of every pair
+async function nativeButton() {
+  const dir = process.env.VF_SHOT_DIR;
+  if (dir) fs.mkdirSync(dir, { recursive: true });
+  const gesture = (b, expr) => b.page("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true });
+  for (const theme of ["light", "dark"]) {
+    const h = newHub();
+    await h.listen();
+    const b = await launch();
+    try {
+      await load(b, h, `?bg=light&fs&theme=${theme}`);
+      await view(b, 1500, 1500);
+      const sizes = [[320, 180], [640, 360], [1280, 720]];
+      const take = async (W, H, state, label) => {
+        const r = await b.ev("(() => { const r = document.getElementById('fsvid').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()");
+        const [bx, by] = state === "hover" ? [r[0] + r[2] - 72, r[1] + r[3] - 48] : [r[0] + 10, r[1] + 10];
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: r[0] + 3, y: r[1] + 3 });
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: bx, y: by });
+        await sleep(700);
+        const img = await shot(b, { x: r[0], y: r[1], width: r[2], height: r[3], scale: 2 });
+        if (dir) fs.writeFileSync(`${dir}/pair-${theme}-${W}-${state}-${label}.png`, img.png);
+        return img;
+      };
+      const results = {};
+      for (const phase of ["native", "ours"]) {
+        if (phase === "ours") await island(b, 0.3);
+        for (const [W, H] of sizes) {
+          await b.ev(`(async () => { const v = document.getElementById('fsvid'); v.style.width = '${W}px'; v.style.height = '${H}px'; window.scrollTo(0, 0);
+            v.pause(); if (v.readyState < 2) await new Promise((ok) => v.addEventListener('loadeddata', ok, { once: true }));
+            v.currentTime = 0.5; await new Promise((ok) => v.addEventListener('seeked', ok, { once: true })); })()`);
+          for (const state of ["idle", "hover"]) results[`${W}-${state}-${phase}`] = await take(W, H, state, phase);
+        }
+      }
+      for (const [W, H] of sizes) for (const state of ["idle", "hover"]) {
+        const a = results[`${W}-${state}-native`], c = results[`${W}-${state}-ours`];
+        const cx = (W - 72) * 2, cy = (H - 48) * 2;
+        let bad = 0, worst = 0, n = 0;
+        for (let y = cy - 40; y < cy + 40; y++) for (let x = cx - 40; x < cx + 40; x++) {
+          const d = Math.max(...a.px(x, y).map((v, i) => Math.abs(v - c.px(x, y)[i])));
+          worst = Math.max(worst, d); n++;
+          if (d > 24) bad++;
+        }
+        console.log(`    ${theme} ${W} ${state}: ${bad} of ${n} pixels differ (worst ${worst})`);
+        check(bad <= n * 0.02, `${theme} ${W}px ${state}: our button looks like the native one (${bad} of ${n} pixels differ)`);
+      }
+      // where the native bar drops its fullscreen button ours is gone too, and it comes back as soon as the bar has it
+      const hoverVideo = async (W, H) => {
+        await b.ev(`(() => { const v = document.getElementById('fsvid'); v.style.width = '${W}px'; v.style.height = '${H}px'; })()`);
+        const r = await b.ev("(() => { const r = document.getElementById('fsvid').getBoundingClientRect(); return [r.x, r.y]; })()");
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: r[0] + 5, y: r[1] + 5 });
+        await b.page("Input.dispatchMouseEvent", { type: "mouseMoved", x: r[0] + 20, y: r[1] + 20 });
+      };
+      await hoverVideo(180, 101);
+      await sleep(500);
+      check(await b.ev("!document.querySelector('.vfd-fs') || document.querySelector('.vfd-fs').hidden"), `${theme}: a 180px video has no button`);
+      await hoverVideo(300, 50);
+      await sleep(500);
+      check(await b.ev("!document.querySelector('.vfd-fs') || document.querySelector('.vfd-fs').hidden"), `${theme}: a 50px high video has no button`);
+      await hoverVideo(200, 113);
+      await until(() => b.ev("!!document.querySelector('.vfd-fs') && !document.querySelector('.vfd-fs').hidden"), `${theme}: a 200px video has the button`, 5000);
+    } finally { b.close(); h.close(); }
+  }
+}
+
+const cases = { nativeButton, trashBtn, normal, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

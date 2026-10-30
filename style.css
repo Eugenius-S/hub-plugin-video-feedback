@@ -12,13 +12,39 @@
   padding: 10px 16px; border-radius: var(--radius-lg, 12px); background: var(--popover, var(--card)); color: var(--foreground);
   border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .18); font: 500 var(--text-base, 15px)/1.3 var(--font-ui, inherit);
   max-width: min(560px, 90vw); text-align: center; }
+.vf-banner.vf-banner-fs { position: absolute; top: 24px; bottom: auto; }   /* in full screen: at the top of the fullscreen element, clear of the video bar */
 .vf-trash .icon { width: 20px; height: 20px; }
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
 
 /* ───── pen island over the screen (the look is the designer's mockup): the theme comes from the hub tokens ───── */
-.vfd-root { position: fixed; top: 0; left: 0; z-index: 2147483000; width: max-content; will-change: transform; font-family: var(--font-ui, inherit); }   /* the place is a transform, set by island.js */
+.vfd-root, .vfd-pip-doc {   /* the island's own names for the hub tokens: one place to retune the look */
+  --vfd-surface: var(--card); --vfd-fg: var(--muted-foreground); --vfd-fg-strong: var(--foreground);
+  --vfd-hover: var(--accent); --vfd-hover-strong: var(--muted-2); --vfd-on: var(--front-soft); --vfd-on-fg: var(--primary);
+  --vfd-line: var(--border); --vfd-pip-pad: 0px;
+  --vfd-radius: calc(var(--radius-xl) + 4px);   /* the panel and, with the padding taken off, its buttons */
+}
+.vfd-root { position: fixed; top: 0; left: 0; z-index: 2147483000; width: max-content; transform-origin: 0 0; will-change: transform; font-family: var(--font-ui, inherit); }   /* the place is a transform, set by island.js */
 .vfd-root, .vfd-root *, .vfd-root ::before, .vfd-root ::after { box-sizing: border-box; }
 .vfd-root[hidden], .vfd-root [hidden] { display: none !important; }
+/* in its own Picture-in-Picture window the island sits in the corner and the system moves the window: no grip, no transform */
+.vfd-root.vfd-pip { top: var(--vfd-pip-pad, 0px); left: var(--vfd-pip-pad, 0px); transform: none !important; will-change: auto; }
+.vfd-root.vfd-pip .vfd-grip { display: none; }
+.vfd-root.vfd-pip .vfd-island { box-shadow: none; border-radius: 0; }   /* the window is the island: its own edge, no shadow, no corners to show the page through */
+.vfd-root.vfd-pip .vfd-rec .vf-time { min-width: 5ch; }   /* room for 10:00: the window cannot always grow */
+.vfd-pip-doc, .vfd-pip-doc body { margin: 0; background: var(--vfd-surface, #111); overflow: hidden; }
+/* a <video> or <img> that went fullscreen is shown by our own box (a copy), so the island and the drawing can live inside it */
+.vfd-viewer { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; z-index: 2147482000; }
+.vfd-viewer:fullscreen { width: 100%; height: 100%; }
+.vfd-viewer-media { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* the fullscreen button copies the native one of the video bar: a bare white icon, a dark disc with a hard edge on hover */
+.vfd-fs { position: fixed; top: 0; left: 0; z-index: 2147482995; box-sizing: border-box; width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 0;
+  border-radius: 50%; background: transparent; color: #fff; cursor: default; }
+@media (hover: hover) and (pointer: fine) { .vfd-fs:hover { background: rgb(32 33 36 / .7); } }
+.vfd-fs:focus-visible { outline: 2px solid rgb(255 255 255 / .9); outline-offset: -2px; }
+video[data-vfd-fs]::-webkit-media-controls-fullscreen-button { opacity: 0; pointer-events: none; }
+.vfd-fs[hidden] { display: none; }
+.vfd-fs.is-big { width: 48px; height: 48px; }   /* leaving full screen from our box: a round 48px, the icon 36px */
+.vfd-fs.is-big .vfd-i { width: 36px; height: 36px; }
 .vf-draw { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2147482990; pointer-events: none; }
 .vf-draw.vf-on { pointer-events: auto; cursor: crosshair; touch-action: none; }
 .vfd-i { width: 20px; height: 20px; fill: currentColor; flex: none; }
@@ -30,8 +56,8 @@
   position: relative;
   display: inline-flex; align-items: center; gap: var(--space-1);
   padding: var(--vfd-pad);
-  background: var(--card); color: var(--muted-foreground);
-  border-radius: var(--radius-xl);
+  background: var(--vfd-surface); color: var(--vfd-fg);
+  border-radius: var(--vfd-radius);
   box-shadow: var(--shadow-lift);
   font-family: var(--font-ui);
   user-select: none;
@@ -41,18 +67,18 @@
   position: relative;
   width: 32px; height: 40px; display: grid; place-items: center;
   color: var(--muted-foreground); cursor: grab; touch-action: none;
-  border-radius: calc(var(--radius-xl) - var(--vfd-pad));
+  border-radius: calc(var(--vfd-radius) - var(--vfd-pad));
   transition: color var(--dur-hover) ease;
 }
 .vfd-btn {
   position: relative;
   width: 40px; height: 40px; display: grid; place-items: center;
   padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer;
-  border-radius: calc(var(--radius-xl) - var(--vfd-pad));
+  border-radius: calc(var(--vfd-radius) - var(--vfd-pad));
   transition: background-color var(--dur-hover) ease, color var(--dur-hover) ease;
 }
 .vfd-btn:active { transform: scale(0.97); transition: transform var(--dur-fast) var(--ease-out); }
-.vfd-btn[aria-pressed="true"], .vfd-btn[aria-expanded="true"] { background: var(--front-soft); color: var(--primary); }
+.vfd-btn[aria-pressed="true"], .vfd-btn[aria-expanded="true"] { background: var(--vfd-on); color: var(--vfd-on-fg); }
 .vfd-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 /* pen colour: a round swatch after the grip; the ink goes to every tool (the designer's mock-up) */
 .vfd-color .vfd-dot {
@@ -60,9 +86,23 @@
   background: var(--ink); box-shadow: inset 0 0 0 1px var(--outline-image);
 }
 .vfd-color[aria-expanded="true"] .vfd-tip { display: none; }
-.vfd-sep { width: 1px; height: 20px; background: var(--border); margin: 0 var(--space-1); flex: none; }
+.vfd-sep { width: 1px; height: 20px; background: var(--vfd-line); margin: 0 var(--space-2); flex: none; }   /* groups apart: 8 each side of a divider */
+/* stop recording: the hub's record button look (red dot and time); hover turns the dot into a stop square (the designer's mock-up) */
+.vfd-rec {
+  width: auto; min-width: 72px; padding: 0 var(--space-3);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  color: var(--destructive);
+}
+.vfd-trash { color: var(--vfd-fg); }
+.vfd-trash:focus-visible { color: var(--destructive); }
+.vfd-rec .vf-dot { transition: border-radius var(--dur-hover) ease, scale var(--dur-hover) ease; }
+.vfd-rec .vf-time { min-width: 4ch; text-align: left; }   /* tabular: 0:42 ... 9:59 keep the width */
+.vfd-rec:focus-visible .vf-dot { border-radius: 2px; scale: 1.25; animation: none; }
 @media (hover: hover) and (pointer: fine) {
-  .vfd-btn:not([aria-pressed="true"]):not([aria-expanded="true"]):hover { background: var(--accent); color: var(--foreground); }
+  .vfd-btn:not([aria-pressed="true"]):not([aria-expanded="true"]):hover { background: var(--vfd-hover); color: var(--vfd-fg-strong); }
+  .vfd-island .vfd-btn.vfd-rec:hover {   /* as specific as the hover above, and after it */ background: color-mix(in oklch, var(--destructive) 12%, transparent); color: var(--destructive); }
+  .vfd-island .vfd-btn.vfd-trash:hover { background: color-mix(in oklch, var(--destructive) 12%, transparent); color: var(--destructive); }
+  .vfd-rec:hover .vf-dot { border-radius: 2px; scale: 1.25; animation: none; }
   .vfd-grip:hover { color: var(--foreground); }
 }
 .vfd-island.is-dragging {
@@ -96,8 +136,11 @@
   font-family: var(--font-ui);
 }
 .vfd-pop-head { display: flex; flex-direction: column; gap: var(--space-2); }
-.vfd-pop-title { display: flex; align-items: baseline; justify-content: space-between; font: 600 var(--text-sm)/1.3 var(--font-ui); }
+.vfd-pop-title { display: flex; align-items: center; justify-content: space-between; font: 600 var(--text-sm)/1.3 var(--font-ui); }
 .vfd-pop-title span { font-weight: 400; font-size: var(--text-xs); color: var(--muted-foreground); }
+.vfd-pop-side { display: flex; align-items: center; gap: var(--space-2); }
+/* the island's own cross: the button keeps its size, the header does not grow by it */
+.vfd-pop-x { margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) calc(var(--space-2) * -1) 0; }
 .vfd-search {
   display: flex; align-items: center; gap: var(--space-2);
   height: 36px; padding: 0 var(--space-3);

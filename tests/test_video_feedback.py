@@ -77,7 +77,7 @@ class Source(unittest.TestCase):
         # the island sits outside <body> so a tab capture can crop it out of the video; Motion Gallery is only read, locally
         main, isl = read("main.js"), read("island.js")
         self.assertIn("RT.fromElement(document.body)", main)   # Element Capture: the island is not in the video
-        self.assertIn("documentElement.append(root)", isl)                    # a child of <html>, not of <body>
+        self.assertIn("[document.documentElement, document.body]", isl)      # a child of <html>, not of <body> (inside the fullscreen element only while one is shown)
         self.assertIn('hostname !== "localhost"', main)                       # the gallery is asked only from a local page
         self.assertIn("/gallery.json", main)
         self.assertNotIn("method:", main[main.index("async function gallery()"):main.index("async function gallery()") + 700])  # a plain GET

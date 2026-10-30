@@ -28,6 +28,7 @@ const VOICE_JOBS = 2;
 
 let R = null;          // the running recording: {phase: "count" | "rec" | "work", key, ...}
 const buttons = new Map();   // input field key -> button
+const inButtons = (el) => [...buttons.values()].some((b) => b.contains(el));   // a press on a plugin button counts as the click that floats the island out
 let hubRef = null;
 let pending = [];      // undelivered recordings from IndexedDB (a past life of the tab) - the input field of their chat sends them
 const resuming = new Set();
@@ -60,12 +61,12 @@ export default function register(hub) {
         b.__trash.setAttribute("aria-label", b.__trash.title);
         b.__trash.append(bin());
         b.__trash.addEventListener("click", () => { if (R && R.key === root.__ctx.key) discard(); });
-        // the pen: brings the drawing island back after it was closed (it opens by itself when the recording starts)
+        // the pen: brings the drawing island back after it was closed, in its own window too (it opens by itself when the recording starts)
         b.__pen = hub.el("button", "btn round quiet vf-pen");
         b.__pen.type = "button";
         b.__pen.hidden = true;
         b.__pen.append(pen());
-        b.__pen.addEventListener("click", () => { if (R && R.key === root.__ctx.key) R.island?.open(); });
+        b.__pen.addEventListener("click", () => { if (R && R.key === root.__ctx.key) { R.island?.open(); R.island?.floatForScreen?.(inButtons); } });
         root.append(b.__pen, b.__trash, b);
         root.__btn = b;
       }
@@ -111,6 +112,8 @@ function paintAll() {
   // the hub page does not reload by itself while this mark stands: a recording is running or not delivered yet
   document.documentElement.toggleAttribute("data-hub-hold", !!R && R.phase !== "count");
   for (const [key, b] of buttons) if (b.isConnected) paint(b, key); else buttons.delete(key);
+  // the island's stop button shows the same time as the hub's record button
+  R?.island?.recording(R.phase === "rec" ? clock(performance.now() - R.t0) : null);
 }
 
 function bin() {
@@ -152,10 +155,23 @@ function cam() {
 }
 
 // a caption over the page: the countdown and errors (the hub tab may be out of sight - the same goes for the button)
+// In full screen only the fullscreen element and what is inside it is shown, so the caption goes inside it (video, iframe and the
+// like cannot hold it: those stay under the page, the island floats out there anyway)
+const bannerHost = () => {
+  const fe = document.fullscreenElement;
+  return fe && fe !== document.documentElement && !/^(video|audio|iframe|embed|object|img|canvas|input|textarea|select|br|hr)$/.test(fe.localName) ? fe : document.body;
+};
+function bannerPut(n) {
+  const h = bannerHost();
+  if (n.parentNode !== h) h.append(n);
+  n.classList.toggle("vf-banner-fs", h !== document.body);
+}
+document.addEventListener("fullscreenchange", () => { const n = document.querySelector(".vf-banner"); if (n) bannerPut(n); });
 function banner(text, ms) {
   let n = document.querySelector(".vf-banner");
   if (!text) return n?.remove();
-  if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); document.body.append(n); }
+  if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); }
+  bannerPut(n);
   n.textContent = text;
   clearTimeout(n.__t);
   if (ms) n.__t = setTimeout(() => n.remove(), ms);
@@ -270,9 +286,12 @@ function record() {
     el: hubRef.el, t,
     timecode: () => stamp(performance.now() - r.t0), gallery,
     onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
-    onToggle: () => paintAll(),
+    onToggle: () => paintAll(), onStop: () => stop(), onDiscard: () => discard(),
   });
   r.island.open();
+  // the island goes into its own small window at once, for any recording; if the browser wants a click first,
+  // the first press on the island or on a plugin button floats it out
+  r.island.floatForScreen(inButtons);
   if (r.mic) {
     r.audio = new AudioContext();
     r.an = r.audio.createAnalyser();
