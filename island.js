@@ -932,6 +932,7 @@ export function createIsland(o) {
     if (pipRO) { pipRO.disconnect(); pipRO = null; }
     if (pipTick) { clearInterval(pipTick); pipTick = 0; }
     for (const p of PIP_PROPS) root.style.removeProperty(p);
+    fold.style.removeProperty("display");
     closePop(); closeColor(); dismissToast(); tipOff();
     root.classList.remove("vfd-pip", "vfd-layer");
     root.style.transform = "";
@@ -971,6 +972,7 @@ export function createIsland(o) {
     set("margin", "0");
     set("transform-origin", layer ? "50% 0" : "50% 50%");
     set("transform", `translate(-50%, ${layer ? "0" : "-50%"}) scale(${k})`);
+    fold.style.setProperty("display", "inline-flex", "important");   // "minimize" lives only in the window: shown inline for the same reason
   }
   const PIP_PROPS = ["position", "left", "right", "bottom", "top", "margin", "transform-origin", "transform"];
   function pipDoc(w) {

@@ -1337,6 +1337,45 @@ async function narrowPip() {
   } finally { b.close(); h.close(); }
 }
 
+// 16b. A browser that shows the island's window without the plugin's window rules (Dia on macOS: a small window, the copied
+// stylesheet has no effect there) and resizes it without a resize event: the island still fits, sits in the middle and the
+// window is painted in the island's colour, not left white
+async function diaPip() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, `?bg=light${process.env.VF_PIP_THEME ? "&theme=" + process.env.VF_PIP_THEME : ""}`);
+    await view(b);
+    await b.ev(fakePip(false));
+    await b.ev("window.__pipFixed = { w: 175, h: 130 }");
+    const surf = await b.ev("(() => { const t = document.createElement('i'); t.className = 'vfd-root'; t.style.color = 'var(--vfd-surface)'; document.body.append(t); const c = getComputedStyle(t).color; t.remove(); return c; })()");
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    const doc = "window.__pip.document";
+    await until(() => b.ev(`[...${doc}.styleSheets].some((s) => { try { return s.cssRules.length > 0; } catch { return false; } })`), "the window has its styles", 10000);
+    await b.ev(`(() => { for (const s of ${doc}.styleSheets) { try { for (let i = s.cssRules.length - 1; i >= 0; i--) if ((s.cssRules[i].selectorText || "").includes("vfd-pip")) s.deleteRule(i); } catch {} } return 0; })()`);
+    // the window grows by a few pixels without telling anyone
+    await b.ev("document.getElementById('fakepip').style.height = '134px'; 0");
+    await sleep(1000);
+    const [iw, ihh, l, t, r, bt] = await b.ev(`(() => { const e = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); const d = ${doc}.documentElement; return [d.clientWidth, d.clientHeight, e.left, e.top, e.right, e.bottom]; })()`);
+    check(l >= -1 && r <= iw + 1 && t >= -1 && bt <= ihh + 1, `the island fits the window (window ${iw}x${ihh}, island ${l.toFixed(0)},${t.toFixed(0)}..${r.toFixed(0)},${bt.toFixed(0)})`);
+    check(Math.abs(l - (iw - r)) <= 2 && Math.abs(t - (ihh - bt)) <= 2, `the island is in the middle of the window (${l.toFixed(0)}/${(iw - r).toFixed(0)}, ${t.toFixed(0)}/${(ihh - bt).toFixed(0)})`);
+    const btns = await b.ev(`['.vfd-rec', '.vfd-trash', '.vfd-min'].map((q) => { const e = ${doc}.querySelector(q); const r = e && e.getBoundingClientRect(); const d = ${doc}.documentElement; return q + ':' + (r ? [r.left, r.top, r.right, r.bottom, r.width].map((x) => x.toFixed(0)).join(',') : 'none') + (r && r.width > 0 && r.left >= -1 && r.top >= -1 && r.right <= d.clientWidth + 1 && r.bottom <= d.clientHeight + 1 ? '' : '!'); }).join(' ')`);
+    check(!btns.includes("!"), `stop, trash and minimize are inside the window (${btns})`);
+    const [hb, bb, ib] = await b.ev(`(() => { const d = ${doc}; return [getComputedStyle(d.documentElement).backgroundColor, getComputedStyle(d.body).backgroundColor, getComputedStyle(d.querySelector('.vfd-island')).backgroundColor]; })()`);
+    const solid = (c) => c !== "rgba(0, 0, 0, 0)" && c !== "transparent";
+    check(solid(hb) && solid(bb) && hb === bb, `the window is painted one colour (html ${hb}, body ${bb})`);
+    check(bb === surf, `the window has the island's theme surface (${bb}, theme ${surf})`);
+    await b.ev(`${doc}.querySelector('.vfd-min').click()`);
+    await until(() => b.ev("!document.getElementById('fakepip') && !!document.querySelector('.vfd-root') && !document.querySelector('.vfd-root.vfd-pip')"), "the island is back on the page", 10000);
+    check(await b.ev("document.querySelector('.vfd-root').style.transform === '' || !document.querySelector('.vfd-root').style.position"), "the page island lost the window's inline placement");
+    check(await phase(b) === "rec", "the recording goes on after the island is minimized");
+    await b.ev("document.querySelector('.vfd-rec').click()");
+    await until(() => h.sends.length, "the recording is sent from the page", 60000);
+  } finally { b.close(); h.close(); }
+}
+
 // 17. Motion Gallery in the island's window: the gallery has its own cross (the island's cross, repeated), closing it brings the
 // window back to its size, and the screen corner the window is pressed to stays where it was while it grows and shrinks
 async function galleryClose() {
@@ -1587,7 +1626,7 @@ async function realPip() {
   } finally { b.close(); h.close?.(); }
 }
 
-const cases = { realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, pipOnScreen, galleryClose, smooth };
+const cases = { realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
