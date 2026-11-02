@@ -323,12 +323,12 @@ export function createIsland(o) {
   const size = { w: 0, h: 0 };
   let k = 1;   // the island's scale (in full screen it grows with the screen, see scale())
   // the window the island lives in: the hub page, or the Picture-in-Picture window while it floats there
-  let win = window, pipWin = null, pipAuto = false, pipRO = null;
+  let win = window, pipWin = null, pipAuto = false, pipRO = null, pipTick = 0, pipBg = "";
   const vw = () => win.innerWidth, vh = () => win.innerHeight;
   const measure = () => { size.w = root.offsetWidth * k; size.h = root.offsetHeight * k; };   // scale does not change layout sizes: they are multiplied
   const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, vw() - size.w - 4)),
     y: Math.min(Math.max(4, y), Math.max(4, vh() - size.h - 4)) });
-  const put = () => { root.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)${k === 1 ? "" : ` scale(${k})`}`; };   // the scale goes after the move: the move is not scaled
+  const put = () => { if (pipWin) return pipScale(); root.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)${k === 1 ? "" : ` scale(${k})`}`; };   // the scale goes after the move: the move is not scaled
   const place = (x, y) => {
     const p = keepIn(x, y);
     if (p.x !== pos.x || p.y !== pos.y || !root.style.transform) { pos = p; put(); }
@@ -893,6 +893,7 @@ export function createIsland(o) {
     copyStyles(w.document);
     w.document.body.className = document.body.className;
     pipWin = w; win = w; pipAuto = !!auto;
+    pipBg = getComputedStyle(root).getPropertyValue("--vfd-surface").trim();   // the theme surface, read while the page styles still apply
     root.classList.add("vfd-pip");
     root.style.transform = "";
     w.document.body.append(root);
@@ -911,7 +912,10 @@ export function createIsland(o) {
     });
     w.addEventListener("resize", pipScale);
     // the styles and fonts of the new window arrive after it opens: the panel changes size then, the scale follows it
-    try { pipRO = new w.ResizeObserver(pipScale); pipRO.observe(root); } catch { /* no observer: the resize event and the fit are enough */ }
+    try { pipRO = new w.ResizeObserver(pipScale); pipRO.observe(root); pipRO.observe(w.document.documentElement); } catch { /* no observer: the resize event and the fit are enough */ }
+    // a browser may resize the new window without a resize event (Dia opens it small): look again for a moment after opening
+    let ticks = 0;
+    pipTick = setInterval(() => { if (pipWin !== w || ++ticks > 25) { clearInterval(pipTick); pipTick = 0; } else pipScale(); }, 100);
     pipScale();
     home();
     o.onFloat?.(true);
@@ -926,6 +930,8 @@ export function createIsland(o) {
     w.removeEventListener("resize", pipScale);
     try { w.document.removeEventListener("pointerdown", pipPress, true); } catch { /* gone */ }
     if (pipRO) { pipRO.disconnect(); pipRO = null; }
+    if (pipTick) { clearInterval(pipTick); pipTick = 0; }
+    for (const p of PIP_PROPS) root.style.removeProperty(p);
     closePop(); closeColor(); dismissToast(); tipOff();
     root.classList.remove("vfd-pip", "vfd-layer");
     root.style.transform = "";
@@ -948,9 +954,38 @@ export function createIsland(o) {
     const layer = pop || cpop || toast;
     root.classList.toggle("vfd-layer", !!layer);   // a popover under the island: the island sits at the top, the popover below it
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
-    const iw = w.innerWidth - 2 * PIP_PAD, ih = w.innerHeight - 2 * PIP_PAD;
-    const k = Math.min(1, iw / Math.max(size.w, lw, 1), ih / Math.max(size.h + lh, 1));
-    w.document.documentElement.style.setProperty("--vfd-pip-scale", String(k > 0 ? k : 1));
+    const de = w.document.documentElement;
+    const iw = (de.clientWidth || w.innerWidth) - 2 * PIP_PAD, ih = (de.clientHeight || w.innerHeight) - 2 * PIP_PAD;
+    let k = Math.min(1, iw / Math.max(size.w, lw, 1), ih / Math.max(size.h + lh, 1));
+    if (!(k > 0)) k = 1;
+    de.style.setProperty("--vfd-pip-scale", String(k));
+    // placement and background are set inline too: some browsers (Dia) do not apply the copied stylesheet rules to the window,
+    // and then the panel sat in the top left corner at full size, cut off, on a white page
+    pipDoc(w);
+    const set = (p, v) => root.style.setProperty(p, v, "important");
+    set("position", "fixed");
+    set("left", "50%");
+    set("right", "auto");
+    set("bottom", "auto");
+    set("top", layer ? "0px" : "50%");
+    set("margin", "0");
+    set("transform-origin", layer ? "50% 0" : "50% 50%");
+    set("transform", `translate(-50%, ${layer ? "0" : "-50%"}) scale(${k})`);
+  }
+  const PIP_PROPS = ["position", "left", "right", "bottom", "top", "margin", "transform-origin", "transform"];
+  function pipDoc(w) {
+    const d = w.document;
+    const bg = (w.getComputedStyle(root).getPropertyValue("--vfd-surface") || "").trim() || pipBg || "#111";
+    for (const el of [d.documentElement, d.body]) {
+      if (!el) continue;
+      const s = el.style;
+      s.setProperty("margin", "0", "important");
+      s.setProperty("padding", "0", "important");
+      s.setProperty("width", "100%", "important");
+      s.setProperty("height", "100%", "important");
+      s.setProperty("overflow", "hidden", "important");
+      s.setProperty("background", bg, "important");
+    }
   }
   function pipPress() {
     const w = pipWin;
