@@ -173,7 +173,7 @@ async function launch() {
     if (r.exceptionDetails) throw new Error("page: " + (r.exceptionDetails.exception?.description || r.exceptionDetails.text));
     return r.result.value;
   };
-  return { page, ev, close: () => { try { browser.close(); } catch { /* already closed */ } proc.kill(); } };
+  return { page, ev, send, close: () => { try { browser.close(); } catch { /* already closed */ } proc.kill(); } };
 }
 
 const held = (b) => b.ev("document.documentElement.hasAttribute('data-hub-hold')");
@@ -1538,7 +1538,56 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, pipOnScreen, galleryClose, smooth };
+
+// TEMP: a real Document PiP, measured
+async function realPip() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await view(b, 1000, 700);
+    await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/${process.env.VF_PIP_QUERY || ""}` });
+    await until(() => b.ev("window.__ready === true").catch(() => false), "the harness page");
+    const has = await b.ev("typeof window.documentPictureInPicture + ':' + typeof window.documentPictureInPicture?.requestWindow");
+    console.log("documentPictureInPicture:", has);
+    await b.ev(`(() => { const d = window.documentPictureInPicture; if (!d) return 0; const r = d.requestWindow.bind(d);
+      window.__asked = []; d.requestWindow = async (o) => { window.__asked.push(o); const w = await r(o); window.__pip = w; return w; }; return 0; })()`);
+    await b.page("Runtime.evaluate", { expression: "window.__root.querySelector('.vf-btn').click()", userGesture: true });
+    await until(async () => (await phase(b)) === "rec", "recording is running", 20000);
+    await sleep(2500);
+    const MEASURE = `(() => { const w = window.__pip; if (!w) return { pip: false, asked: window.__asked };
+      const d = w.document, r = d.querySelector('.vfd-root'), cs = (e) => e ? w.getComputedStyle(e) : null;
+      const rect = (s) => { const e = d.querySelector(s); if (!e) return null; const q = e.getBoundingClientRect(); return { x: Math.round(q.x), y: Math.round(q.y), w: Math.round(q.width), h: Math.round(q.height), vis: cs(e).visibility, disp: cs(e).display, hidden: e.hidden }; };
+      return { pip: true, asked: window.__asked, inner: [w.innerWidth, w.innerHeight], outer: [w.outerWidth, w.outerHeight],
+        htmlClass: d.documentElement.className, bodyClass: d.body.className, pageHtmlClass: document.documentElement.className,
+        htmlBg: cs(d.documentElement).backgroundColor, bodyBg: cs(d.body).backgroundColor, scheme: cs(d.documentElement).colorScheme,
+        sheets: d.styleSheets.length, pageSheets: document.styleSheets.length, pageAdopted: document.adoptedStyleSheets.length,
+        rootIn: !!r, scale: r && r.style.getPropertyValue('--vfd-pip-scale'), rootTf: r && r.style.transform,
+        island: rect('.vfd-island'), rec: rect('.vfd-rec'), trash: rect('.vfd-trash'), min: rect('.vfd-min'), time: rect('.vfd-time'),
+        islandBg: cs(d.querySelector('.vfd-island'))?.backgroundColor }; })()`;
+    const m = await b.ev(MEASURE);
+    console.log(JSON.stringify(m, null, 1));
+    // resizeTo from a gesture
+    const t = await b.page("Target.getTargets");
+    console.log("targets:", JSON.stringify(t.targetInfos.map((x) => [x.type, x.url, x.title])));
+    const pt = t.targetInfos.find((x) => x.url === "about:blank" && x.type !== "browser" && x.attached === false) || t.targetInfos.find((x) => /picture/i.test(x.type));
+    if (pt) {
+      const { sessionId } = await b.send("Target.attachToTarget", { targetId: pt.targetId, flatten: true });
+      const s = await b.send("Page.captureScreenshot", { format: "png" }, sessionId);
+      const out = (process.env.VF_SHOTS || "/tmp") + "/" + (process.env.VF_PIP_NAME || "realpip") + ".png";
+      fs.writeFileSync(out, Buffer.from(s.data, "base64"));
+      console.log("shot:", out);
+      const [rw, rh] = (process.env.VF_PIP_RESIZE || "315,260").split(",").map(Number);
+      await b.send("Runtime.evaluate", { expression: `window.resizeTo(${rw}, ${rh}); 0`, userGesture: true }, sessionId).catch((e) => console.log("resizeTo err", e.message));
+      await sleep(800);
+      console.log("after resizeTo:", JSON.stringify(await b.ev(MEASURE), null, 1));
+      const s2 = await b.send("Page.captureScreenshot", { format: "png" }, sessionId);
+      fs.writeFileSync(out.replace(/\.png$/, "-small.png"), Buffer.from(s2.data, "base64"));
+    }
+  } finally { b.close(); h.close?.(); }
+}
+
+const cases = { realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
