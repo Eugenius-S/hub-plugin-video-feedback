@@ -323,7 +323,7 @@ export function createIsland(o) {
   const size = { w: 0, h: 0 };
   let k = 1;   // the island's scale (in full screen it grows with the screen, see scale())
   // the window the island lives in: the hub page, or the Picture-in-Picture window while it floats there
-  let win = window, pipWin = null, pipAuto = false;
+  let win = window, pipWin = null, pipAuto = false, pipRO = null;
   const vw = () => win.innerWidth, vh = () => win.innerHeight;
   const measure = () => { size.w = root.offsetWidth * k; size.h = root.offsetHeight * k; };   // scale does not change layout sizes: they are multiplied
   const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, vw() - size.w - 4)),
@@ -908,6 +908,8 @@ export function createIsland(o) {
       if (fs) { if (opened) { mount(); fit(); home(); } } else close();
     });
     w.addEventListener("resize", pipScale);
+    // the styles and fonts of the new window arrive after it opens: the panel changes size then, the scale follows it
+    try { pipRO = new w.ResizeObserver(pipScale); pipRO.observe(root); } catch { /* no observer: the resize event and the fit are enough */ }
     pipScale();
     home();
     o.onFloat?.(true);
@@ -919,6 +921,8 @@ export function createIsland(o) {
     if (!w) return null;
     pipWin = null; win = window; pipAuto = false;
     w.removeEventListener("keydown", keys);
+    w.removeEventListener("resize", pipScale);
+    if (pipRO) { pipRO.disconnect(); pipRO = null; }
     closePop(); closeColor(); dismissToast(); tipOff();
     root.classList.remove("vfd-pip");
     root.style.transform = "";

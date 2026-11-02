@@ -1220,10 +1220,13 @@ const fakePip = (gesture) => `(() => {
     // the geometry of a real window: a frame around the page, a screen (the page's viewport) it cannot leave, a resize that
     // keeps the top left, and a browser that pushes a window back onto the screen when it grows past an edge
     const CH = { w: 0, h: 32 }, SW = innerWidth, SH = innerHeight;
-    const g = { x: 0, y: 0, w: width + CH.w, h: height + CH.h };
+    const fx = window.__pipFixed;
+    const g = { x: 0, y: 0, w: (fx ? fx.w : width) + CH.w, h: (fx ? fx.h : height) + CH.h };
+    f.style.width = (g.w - CH.w) + "px"; f.style.height = (g.h - CH.h) + "px";
     const clamp = () => { g.x = Math.max(0, Math.min(g.x, SW - g.w)); g.y = Math.max(0, Math.min(g.y, SH - g.h)); };
     const apply = () => {
       f.style.width = (g.w - CH.w) + "px"; f.style.height = (g.h - CH.h) + "px";
+      queueMicrotask(() => w.dispatchEvent(new Event("resize")));
       if (window.__pipVisible) { f.style.left = g.x + "px"; f.style.top = g.y + "px"; f.style.zIndex = 2147483647; f.style.boxShadow = "0 8px 32px #0006"; }
     };
     g.x = SW - g.w - 20; g.y = SH - g.h - 20;
@@ -1231,7 +1234,7 @@ const fakePip = (gesture) => `(() => {
     get("screenX", () => g.x); get("screenY", () => g.y); get("outerWidth", () => g.w); get("outerHeight", () => g.h);
     get("innerWidth", () => g.w - CH.w); get("innerHeight", () => g.h - CH.h);
     get("screen", () => ({ availLeft: 0, availTop: 0, availWidth: SW, availHeight: SH }));
-    Object.defineProperty(w, "resizeTo", { configurable: true, value: (nw, nh) => { g.w = nw; g.h = nh; clamp(); apply(); } });
+    Object.defineProperty(w, "resizeTo", { configurable: true, value: (nw, nh) => { const fx = window.__pipFixed; g.w = (fx ? fx.w : nw) + CH.w; g.h = (fx ? fx.h : nh) + CH.h; clamp(); apply(); } });
     Object.defineProperty(w, "moveTo", { configurable: true, value: (x, y) => { g.x = x; g.y = y; clamp(); apply(); } });
     window.__pipGeo = () => ({ x: g.x, y: g.y, w: g.w, h: g.h, right: g.x + g.w, bottom: g.y + g.h });
     window.__pipPlace = (x, y) => { g.x = x; g.y = y; clamp(); apply(); };
@@ -1287,6 +1290,37 @@ async function away() {
     await until(() => h.sends.length, "the recording is sent from the window's stop button", 60000);
     await until(async () => !(await phase(b)), "the recording stopped", 20000);
     check(await b.ev("!document.getElementById('fakepip') && !document.querySelector('.vfd-root')?.checkVisibility?.()"), "after the stop: no window, no island");
+  } finally { b.close(); h.close(); }
+}
+
+// 16b. A window the browser keeps smaller than the panel (a Mac refuses the size it is asked for): the island shrinks to fit, nothing is
+// cut off, the window is painted all over in the page's colours, and the minimize button puts the island back on the page
+async function narrowPip() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await b.ev("window.__pipFixed = { w: 270, h: 230 }");
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    await sleep(500);
+    const doc = "window.__pip.document";
+    const [iw, ihh, right, bottom, left] = await b.ev(`(() => { const r = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); return [window.__pip.innerWidth, window.__pip.innerHeight, r.right, r.bottom, r.left]; })()`);
+    check(right <= iw + 1 && left >= -1, `the island is not cut off at the sides (window ${iw}, island ${left.toFixed(0)}..${right.toFixed(0)})`);
+    check(bottom <= ihh + 1, `the island is not cut off at the bottom (window ${ihh}, island ends ${bottom.toFixed(0)})`);
+    check(await b.ev(`['.vfd-rec', '.vfd-trash', '.vfd-time'].every((q) => { const e = ${doc}.querySelector(q); if (!e) return q === '.vfd-time'; const r = e.getBoundingClientRect(); return r.width > 0 && r.right <= window.__pip.innerWidth + 1; })`), "the stop button and the bin are inside the window");
+    check(await b.ev(`(() => { const d = ${doc}; const c = getComputedStyle(d.documentElement).backgroundColor, k = getComputedStyle(d.body).backgroundColor; const i = getComputedStyle(d.querySelector('.vfd-island')).backgroundColor; return c !== 'rgba(0, 0, 0, 0)' && c === k && c === i; })()`), "the window is painted all over in the island colour");
+    check(await b.ev(`(() => { const d = ${doc}; return d.body.getBoundingClientRect().height >= window.__pip.innerHeight - 1; })()`), "the body fills the window");
+    check(await b.ev(`getComputedStyle(${doc}.querySelector('.vfd-min')).display !== 'none'`), "the minimize button is shown in the window");
+    check(await b.ev("!document.querySelector('.vfd-min') || getComputedStyle(document.querySelector('.vfd-min')).display === 'none'"), "no minimize button on the page");
+    await b.ev(`${doc}.querySelector('.vfd-min').click()`);
+    await until(() => b.ev("!document.getElementById('fakepip') && !!document.querySelector('.vfd-root') && !document.querySelector('.vfd-root.vfd-pip')"), "the island is back on the page and the window is closed", 10000);
+    check(await phase(b) === "rec", "the recording goes on after the island is minimized");
+    await b.ev("document.querySelector('.vfd-rec').click()");
+    await until(() => h.sends.length, "the recording is sent from the page", 60000);
   } finally { b.close(); h.close(); }
 }
 
@@ -1491,7 +1525,7 @@ async function nativeButton() {
   }
 }
 
-const cases = { nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, pipOnScreen, galleryClose, smooth };
+const cases = { nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
