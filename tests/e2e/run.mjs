@@ -1358,6 +1358,12 @@ async function diaPip() {
     // the window grows by a few pixels without telling anyone
     await b.ev("document.getElementById('fakepip').style.height = '134px'; 0");
     await sleep(1000);
+    if (process.env.VF_SHOTS) {
+      fs.mkdirSync(process.env.VF_SHOTS, { recursive: true });
+      await b.ev("window.__pipVisible = true; window.__pipPlace(40, 40); 0");
+      await sleep(300);
+      fs.writeFileSync(`${process.env.VF_SHOTS}/dia-${process.env.VF_PIP_NAME || "light"}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
+    }
     const [iw, ihh, l, t, r, bt] = await b.ev(`(() => { const e = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); const d = ${doc}.documentElement; return [d.clientWidth, d.clientHeight, e.left, e.top, e.right, e.bottom]; })()`);
     check(l >= -1 && r <= iw + 1 && t >= -1 && bt <= ihh + 1, `the island fits the window (window ${iw}x${ihh}, island ${l.toFixed(0)},${t.toFixed(0)}..${r.toFixed(0)},${bt.toFixed(0)})`);
     check(Math.abs(l - (iw - r)) <= 2 && Math.abs(t - (ihh - bt)) <= 2, `the island is in the middle of the window (${l.toFixed(0)}/${(iw - r).toFixed(0)}, ${t.toFixed(0)}/${(ihh - bt).toFixed(0)})`);
