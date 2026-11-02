@@ -884,7 +884,7 @@ export function createIsland(o) {
     measure();
     k = k0;
     float.hidden = fh;
-    root.classList.remove("vfd-pip");
+    root.classList.remove("vfd-pip", "vfd-layer");
     let w;
     try {
       w = await documentPictureInPicture.requestWindow({ width: Math.ceil(size.w) + 2 * PIP_PAD, height: Math.ceil(size.h) + 2 * PIP_PAD });
@@ -899,6 +899,8 @@ export function createIsland(o) {
     float.hidden = true;   // the way back is not offered: the window is only closed
     w.addEventListener("keydown", keys);
     w.document.addEventListener("pointerdown", away, true);
+    // a window the browser kept at a size of its own (opened without a user action) takes the panel's size on the first press in it
+    w.document.addEventListener("pointerdown", pipPress, true);
     // the person closed the window: the island is closed too (the recording goes on, the pen on the page brings it back).
     // A window opened only to get past a fullscreen element just goes back to the page when that ends
     w.addEventListener("pagehide", () => {
@@ -922,9 +924,10 @@ export function createIsland(o) {
     pipWin = null; win = window; pipAuto = false;
     w.removeEventListener("keydown", keys);
     w.removeEventListener("resize", pipScale);
+    try { w.document.removeEventListener("pointerdown", pipPress, true); } catch { /* gone */ }
     if (pipRO) { pipRO.disconnect(); pipRO = null; }
     closePop(); closeColor(); dismissToast(); tipOff();
-    root.classList.remove("vfd-pip");
+    root.classList.remove("vfd-pip", "vfd-layer");
     root.style.transform = "";
     float.hidden = !canPip();
     o.onFloat?.(false);
@@ -943,10 +946,18 @@ export function createIsland(o) {
     if (!w) return;
     measure();
     const layer = pop || cpop || toast;
+    root.classList.toggle("vfd-layer", !!layer);   // a popover under the island: the island sits at the top, the popover below it
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
     const iw = w.innerWidth - 2 * PIP_PAD, ih = w.innerHeight - 2 * PIP_PAD;
     const k = Math.min(1, iw / Math.max(size.w, lw, 1), ih / Math.max(size.h + lh, 1));
     w.document.documentElement.style.setProperty("--vfd-pip-scale", String(k > 0 ? k : 1));
+  }
+  function pipPress() {
+    const w = pipWin;
+    if (!w) return;
+    const lay = pop || cpop || toast;
+    if (lay) return;   // a popover is open: its own click already fits the window
+    setTimeout(pipFit, 0);
   }
   // the window is exactly the panel, and follows it when the buttons change; it grows for a popover and shrinks back.
   // It can only change size on a user action (the click that opened the popover or pressed Record); without one the size stays

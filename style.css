@@ -27,7 +27,8 @@
 .vfd-root, .vfd-root *, .vfd-root ::before, .vfd-root ::after { box-sizing: border-box; }
 .vfd-root[hidden], .vfd-root [hidden] { display: none !important; }
 /* in its own Picture-in-Picture window the island sits in the corner and the system moves the window: no grip, no transform */
-.vfd-root.vfd-pip { top: var(--vfd-pip-pad, 0px); left: var(--vfd-pip-pad, 0px); transform: scale(var(--vfd-pip-scale, 1)) !important; transform-origin: 0 0; will-change: auto; }   /* the scale only shrinks when the window stayed smaller than the panel */
+.vfd-root.vfd-pip { top: 50%; left: 50%; transform: translate(-50%, -50%) scale(var(--vfd-pip-scale, 1)) !important; transform-origin: 50% 50%; will-change: auto; }   /* in a window the size of the panel this is the corner; in a bigger one the panel sits in the middle, on the panel's own background, with no empty strip on one side */
+.vfd-root.vfd-pip.vfd-layer { top: 0; transform: translate(-50%, 0) scale(var(--vfd-pip-scale, 1)) !important; transform-origin: 50% 0; }   /* with a popover open the window holds both: the island on top, the popover under it */
 .vfd-root.vfd-pip .vfd-grip { display: none; }
 .vfd-root.vfd-pip .vfd-island { box-shadow: none; border-radius: 0; }   /* the window is the island: its own edge, no shadow, no corners to show the page through */
 .vfd-root.vfd-pip .vfd-rec .vf-time { min-width: 5ch; }   /* room for 10:00: the window cannot always grow */

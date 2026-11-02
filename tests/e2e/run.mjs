@@ -1300,7 +1300,7 @@ async function narrowPip() {
   await h.listen();
   const b = await launch();
   try {
-    await load(b, h, "?bg=light");
+    await load(b, h, `?bg=light${process.env.VF_PIP_THEME ? "&theme=" + process.env.VF_PIP_THEME : ""}`);
     await view(b);
     await b.ev(fakePip(false));
     await b.ev("window.__pipFixed = { w: 270, h: 230 }");
@@ -1314,8 +1314,21 @@ async function narrowPip() {
     check(await b.ev(`['.vfd-rec', '.vfd-trash', '.vfd-time'].every((q) => { const e = ${doc}.querySelector(q); if (!e) return q === '.vfd-time'; const r = e.getBoundingClientRect(); return r.width > 0 && r.right <= window.__pip.innerWidth + 1; })`), "the stop button and the bin are inside the window");
     check(await b.ev(`(() => { const d = ${doc}; const c = getComputedStyle(d.documentElement).backgroundColor, k = getComputedStyle(d.body).backgroundColor; const i = getComputedStyle(d.querySelector('.vfd-island')).backgroundColor; return c !== 'rgba(0, 0, 0, 0)' && c === k && c === i; })()`), "the window is painted all over in the island colour");
     check(await b.ev(`(() => { const d = ${doc}; return d.body.getBoundingClientRect().height >= window.__pip.innerHeight - 1; })()`), "the body fills the window");
+    check(await b.ev(`(() => { const r = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); return Math.abs(r.top - (window.__pip.innerHeight - r.bottom)) <= 2 && Math.abs(r.left - (window.__pip.innerWidth - r.right)) <= 2; })()`), "the island sits in the middle of the window, not stuck to a corner");
     check(await b.ev(`getComputedStyle(${doc}.querySelector('.vfd-min')).display !== 'none'`), "the minimize button is shown in the window");
     check(await b.ev("!document.querySelector('.vfd-min') || getComputedStyle(document.querySelector('.vfd-min')).display === 'none'"), "no minimize button on the page");
+    if (process.env.VF_SHOTS) {
+      fs.mkdirSync(process.env.VF_SHOTS, { recursive: true });
+      await b.ev("window.__pipVisible = true; window.__pipPlace(40, 40); 0");
+      await sleep(300);
+      fs.writeFileSync(`${process.env.VF_SHOTS}/pip-${process.env.VF_PIP_NAME || "light"}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
+    }
+    // the browser let the window be resized only from a click inside it: the first press fits the window to the island
+    const before = await b.ev("window.__pip.innerHeight");
+    await b.ev(`window.__pipFixed = null; ${doc}.querySelector('.vfd-island').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); 0`);
+    await sleep(400);
+    const after = await b.ev("window.__pip.innerHeight");
+    check(after < before - 40, `the first press inside the window fits it to the island (height ${before} -> ${after})`);
     await b.ev(`${doc}.querySelector('.vfd-min').click()`);
     await until(() => b.ev("!document.getElementById('fakepip') && !!document.querySelector('.vfd-root') && !document.querySelector('.vfd-root.vfd-pip')"), "the island is back on the page and the window is closed", 10000);
     check(await phase(b) === "rec", "the recording goes on after the island is minimized");
