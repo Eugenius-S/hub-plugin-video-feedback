@@ -31,6 +31,7 @@ const ICONS = {
   fs: "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z",
   fsExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
   trash: "M 10 2 L 9 3 L 5 3 L 4 3 L 4 5 L 5 5 L 5 20 C 5 21.093063 5.9069372 22 7 22 L 17 22 C 18.093063 22 19 21.093063 19 20 L 19 5 L 20 5 L 20 3 L 19 3 L 18 3 L 15 3 L 14 2 L 10 2 z M 7 5 L 17 5 L 17 20 L 7 20 L 7 5 z",
+  min: "M6 19h12v2H6z",
   close: "M 4.7070312 3.2929688 L 3.2929688 4.7070312 L 10.585938 12 L 3.2929688 19.292969 L 4.7070312 20.707031 L 12 13.414062 L 19.292969 20.707031 L 20.707031 19.292969 L 13.414062 12 L 20.707031 4.7070312 L 19.292969 3.2929688 L 12 10.585938 L 4.7070312 3.2929688 z",
   search: "M 9 2 C 5.1458514 2 2 5.1458514 2 9 C 2 12.854149 5.1458514 16 9 16 C 10.747998 16 12.345009 15.348024 13.574219 14.28125 L 14 14.707031 L 14 16 L 20 22 L 22 20 L 16 14 L 14.707031 14 L 14.28125 13.574219 C 15.348024 12.345009 16 10.747998 16 9 C 16 5.1458514 12.854149 2 9 2 z M 9 4 C 11.773268 4 14 6.2267316 14 9 C 14 11.773268 11.773268 14 9 14 C 6.2267316 14 4 11.773268 4 9 C 4 6.2267316 6.2267316 4 9 4 z",
 };
@@ -117,6 +118,10 @@ export function createIsland(o) {
   const float = btn(o.t("draw_pip"), "pip");
   float.dataset.act = "pip";
   float.hidden = !globalThis.documentPictureInPicture?.requestWindow;
+  // the way back: only in the window, puts the island back onto the page (the window is closed, the drawing goes on)
+  const fold = btn(o.t("draw_min"), "min");
+  fold.dataset.act = "min";
+  fold.classList.add("vfd-min");
   // the stop button: the red dot and the running time, as the hub's record button; only while the screen is recorded
   const sepRec = o.el("span", "vfd-sep");
   const rec = o.el("button", "vfd-btn vfd-rec");
@@ -130,7 +135,7 @@ export function createIsland(o) {
   trash.dataset.act = "discard";
   trash.dataset.tip = o.t("rec_trash");
   sepRec.hidden = trash.hidden = rec.hidden = true;
-  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, rec, o.el("span", "vfd-sep"), float, shut);
+  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, rec, o.el("span", "vfd-sep"), float, fold, shut);
   rec.addEventListener("click", () => { o.onStop?.(); close(); });
   trash.addEventListener("click", () => { o.onDiscard?.(); close(); });
   // recording(time): the screen is recorded, the button shows the running time; recording(null): it is hidden again
@@ -148,6 +153,7 @@ export function createIsland(o) {
   mg.addEventListener("click", () => (pop ? closePop() : openPop()));
   shut.addEventListener("click", () => close());
   float.addEventListener("click", () => floatOut());
+  fold.addEventListener("click", () => closePip());
 
   // tooltip: under the button, for the pointer and for the keyboard (not in the small window: there is no room under the island)
   const tipOn = (e) => {
@@ -901,6 +907,8 @@ export function createIsland(o) {
       leavePip();
       if (fs) { if (opened) { mount(); fit(); home(); } } else close();
     });
+    w.addEventListener("resize", pipScale);
+    pipScale();
     home();
     o.onFloat?.(true);
     return true;
@@ -924,6 +932,18 @@ export function createIsland(o) {
     if (opened) { mount(); fit(); home(); }
     try { w.close(); } catch { /* gone */ }
   }
+  // the window may stay smaller than the panel (the browser holds a minimum, or refuses a resize without a user action): then the
+  // panel shrinks to the window instead of being cut off, and the window background is the panel's own, so no empty strip shows
+  function pipScale() {
+    const w = pipWin;
+    if (!w) return;
+    measure();
+    const layer = pop || cpop || toast;
+    const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
+    const iw = w.innerWidth - 2 * PIP_PAD, ih = w.innerHeight - 2 * PIP_PAD;
+    const k = Math.min(1, iw / Math.max(size.w, lw, 1), ih / Math.max(size.h + lh, 1));
+    w.document.documentElement.style.setProperty("--vfd-pip-scale", String(k > 0 ? k : 1));
+  }
   // the window is exactly the panel, and follows it when the buttons change; it grows for a popover and shrinks back.
   // It can only change size on a user action (the click that opened the popover or pressed Record); without one the size stays
   function pipFit() {
@@ -934,6 +954,7 @@ export function createIsland(o) {
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
     const nw = Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth);
     const nh = Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight);
+    pipScale();
     const ow = w.outerWidth, oh = w.outerHeight, x = w.screenX, y = w.screenY;
     if (nw === ow && nh === oh) return;
     // the window keeps the screen corner it is pressed to: a plain resize holds the top left, and a window by the right or bottom
