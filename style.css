@@ -1,5 +1,7 @@
 /* Video feedback: the icon next to the microphone; countdown, recording in progress (dot and time), transcription */
-.vf-btn .icon { width: calc(var(--icon-size, 16px) * 22 / 16); height: calc(var(--icon-size, 16px) * 22 / 16); }   /* 22px by default; a theme that sets --icon-size (Clean: 16px) scales it with the other buttons */
+.vf-ico { display: block; width: var(--tool-icon, 20px); height: var(--tool-icon, 20px); background: currentColor;
+  -webkit-mask: url("icon.svg") center / contain no-repeat; mask: url("icon.svg") center / contain no-repeat; }   /* the size is the hub's --tool-icon token */
+html.th-clean .slot-composer-tools .vf-ico { -webkit-mask-image: url("icon-clean.svg"); mask-image: url("icon-clean.svg"); }   /* Clean: its own glyph file */
 .btn.round.vf-btn.vf-count { color: var(--primary); }
 .vf-num { font: 600 var(--text-md, 16px)/1 var(--font-ui, inherit); font-variant-numeric: tabular-nums; }
 .btn.round.vf-btn.vf-rec { width: auto; padding: 0 var(--space-2, 8px); gap: 6px; color: var(--destructive); }
@@ -13,7 +15,7 @@
   border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .18); font: 500 var(--text-base, 15px)/1.3 var(--font-ui, inherit);
   max-width: min(560px, 90vw); text-align: center; }
 .vf-banner.vf-banner-fs { position: absolute; top: 24px; bottom: auto; }   /* in full screen: at the top of the fullscreen element, clear of the video bar */
-.vf-trash .icon { width: 20px; height: 20px; }
+.vf-trash .icon { width: var(--tool-icon, 20px); height: var(--tool-icon, 20px); }
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
 
 /* ───── pen island over the screen (the look is the designer's mockup): the theme comes from the hub tokens ───── */
@@ -52,7 +54,7 @@ video[data-vfd-fs]::-webkit-media-controls-fullscreen-button { opacity: 0; point
 .vf-draw.vf-on { pointer-events: auto; cursor: crosshair; touch-action: none; }
 .vfd-i { width: 20px; height: 20px; fill: currentColor; flex: none; }
 .vfd-i16 { width: 16px; height: 16px; }
-.vf-btn.vf-pen .icon, .btn.round.vf-pen .icon { width: 20px; height: 20px; }
+.vf-btn.vf-pen .icon, .btn.round.vf-pen .icon { width: var(--tool-icon, 20px); height: var(--tool-icon, 20px); }
 
 .vfd-island {
   --vfd-pad: var(--space-1);

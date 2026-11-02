@@ -139,17 +139,8 @@ function pen() {
 }
 
 function cam() {
-  const ns = "http://www.w3.org/2000/svg";
-  const s = document.createElementNS(ns, "svg");
-  s.setAttribute("viewBox", "1.5 3 21 18");   // the camera fills its box like the other glyphs of the row; a 24-box left it a 13x8 sliver at 16 px
-  s.setAttribute("class", "icon");
+  const s = hubRef.el("span", "vf-ico");   // the glyph is icon.svg (icon-clean.svg in Clean) drawn as a mask, sized by the hub's --tool-icon
   s.setAttribute("aria-hidden", "true");
-  const p = document.createElementNS(ns, "path");
-  p.setAttribute("fill-rule", "evenodd");
-  p.setAttribute("fill", "currentColor");
-  p.setAttribute("d", "M4 6h10a2 2 0 0 1 2 2v2.4l6-3.4v10l-6-3.4V16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"
-    + "M4 8v8h10V8zM17.6 11.6 20 10.3v3.4l-2.4-1.3z");
-  s.append(p);
   return s;
 }
 

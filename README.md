@@ -44,4 +44,6 @@ The voice is recorded in pieces that are cut at pauses: when a phrase ends it go
 
 `python3 -m unittest discover -s tests` - the manifest and the logic (`node --test`), with no hub and no browser; plus a recording in a real headless Chrome (a canvas instead of the screen, an oscillator instead of the microphone, a fake hub, a hub restart in the middle of an upload): `node tests/e2e/run.mjs [normal|restartMidSend|reloadMidRecording|russian|drawTools|ink|inkPick|closePen|place|theme|tagMg|noGallery|confine|fullscreen|nativeButton|away|smooth]`. Chrome comes from `VF_CHROME` or the usual places; without it the test is skipped. The e2e uses its own throwaway Chrome profile and a random debugging port.
 
+The button glyph is `icon.svg` (`icon-clean.svg` in the Clean theme), drawn as a mask in the colour of the hub's tool buttons and sized by the hub (`--tool-icon`); a hub without per-theme icons shows `icon.svg` everywhere.
+
 Icon — [3D Fluency](https://icons8.com/icons/3d-fluency) by Icons8.

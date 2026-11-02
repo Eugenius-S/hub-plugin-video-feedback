@@ -127,11 +127,18 @@ class Source(unittest.TestCase):
 
 
 class Look(unittest.TestCase):
-    def test_the_camera_fills_its_box_like_the_glyphs_next_to_it(self):
-        """02.11 (d455064): in Clean the 24-box camera was a 13x8 sliver at 16 px next to full-height icons."""
+    def test_the_camera_is_the_icon_file_sized_by_the_hub(self):
+        """The glyph is icon.svg (icon-clean.svg in Clean) drawn as a mask; the size comes from the hub's --tool-icon."""
         js = read("main.js")
         start = js.index("function cam()")
-        self.assertIn('"viewBox", "1.5 3 21 18"', js[start:start + 300])
+        self.assertIn('"vf-ico"', js[start:start + 300])
+        css = read("style.css")
+        self.assertIn("var(--tool-icon, 20px)", css)
+        self.assertIn('url("icon.svg")', css)
+        self.assertIn('url("icon-clean.svg")', css)
+        for name in ("icon.svg", "icon-clean.svg"):
+            self.assertIn('viewBox="0 0 24 24"', read(name), name)
+            self.assertIn("currentColor", read(name), name)
 
 
 class Languages(unittest.TestCase):
