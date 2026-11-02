@@ -141,7 +141,7 @@ function pen() {
 function cam() {
   const ns = "http://www.w3.org/2000/svg";
   const s = document.createElementNS(ns, "svg");
-  s.setAttribute("viewBox", "0 0 24 24");
+  s.setAttribute("viewBox", "1.5 3 21 18");   // the camera fills its box like the other glyphs of the row; a 24-box left it a 13x8 sliver at 16 px
   s.setAttribute("class", "icon");
   s.setAttribute("aria-hidden", "true");
   const p = document.createElementNS(ns, "path");

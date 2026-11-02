@@ -126,6 +126,14 @@ class Source(unittest.TestCase):
             self.assertEqual(z.read("0-00-02.jpg").decode(), "кадр")
 
 
+class Look(unittest.TestCase):
+    def test_the_camera_fills_its_box_like_the_glyphs_next_to_it(self):
+        """02.11 (d455064): in Clean the 24-box camera was a 13x8 sliver at 16 px next to full-height icons."""
+        js = read("main.js")
+        start = js.index("function cam()")
+        self.assertIn('"viewBox", "1.5 3 21 18"', js[start:start + 300])
+
+
 class Languages(unittest.TestCase):
     """UI strings and the message to the session: en by default, ru for a Russian hub; picked at use time by hub.lang."""
 
