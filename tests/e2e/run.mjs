@@ -1382,6 +1382,41 @@ async function diaPip() {
   } finally { b.close(); h.close(); }
 }
 
+// 16c. The island keeps one size: in a window that is smaller than the panel (Dia opens it small and may refuse to grow it) it is
+// not shrunk to fit, its buttons stay as big as on the page; a press in the window asks for the room, and when the window
+// grows the island is whole at the same size
+async function pipFixed() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await b.ev("window.__pipFixed = { w: 175, h: 130 }");
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    const doc = "window.__pip.document";
+    await until(() => b.ev(`[...${doc}.styleSheets].some((s) => { try { return s.cssRules.length > 0; } catch { return false; } })`), "the window has its styles", 10000);
+    await sleep(600);
+    const size = () => b.ev(`(() => { const e = ${doc}.querySelector('.vfd-island'); const r = e.getBoundingClientRect(); const d = ${doc}.documentElement; return [r.width / e.offsetWidth, r.left, r.top, r.right, r.bottom, d.clientWidth, d.clientHeight, e.offsetWidth]; })()`);
+    let [k, l, t, r, bt, iw, ih, ow] = await size();
+    check(k >= 0.99, `the island in a small window is not shrunk (scale ${k.toFixed(2)}, window ${iw}x${ih}, island ${ow} px wide)`);
+    check(l >= -1 && t >= -1, `the island starts inside the window, the cut-off goes to the right and bottom (${l.toFixed(0)},${t.toFixed(0)})`);
+    // the browser lets the window grow
+    await b.ev("window.__pipFixed = null; 0");
+    await b.ev(`${doc}.querySelector('.vfd-island').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse', button: 0 })); 0`);
+    await sleep(1200);
+    [k, l, t, r, bt, iw, ih, ow] = await size();
+    check(k >= 0.99, `the island has the same size after the window grew (scale ${k.toFixed(2)})`);
+    check(l >= -1 && r <= iw + 1 && t >= -1 && bt <= ih + 1, `the whole island is in the grown window (window ${iw}x${ih}, island ${l.toFixed(0)},${t.toFixed(0)}..${r.toFixed(0)},${bt.toFixed(0)})`);
+    await b.ev(`${doc}.querySelector('.vfd-min').click()`);
+    await until(() => b.ev("!document.getElementById('fakepip') && !document.querySelector('.vfd-root.vfd-pip')"), "the island is back on the page", 10000);
+    await b.ev("document.querySelector('.vfd-rec').click()");
+    await until(() => h.sends.length, "the recording is sent from the page", 60000);
+  } finally { b.close(); h.close(); }
+}
+
 // 17. Motion Gallery in the island's window: the gallery has its own cross (the island's cross, repeated), closing it brings the
 // window back to its size, and the screen corner the window is pressed to stays where it was while it grows and shrinks
 async function galleryClose() {
@@ -1632,7 +1667,7 @@ async function realPip() {
   } finally { b.close(); h.close?.(); }
 }
 
-const cases = { realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipOnScreen, galleryClose, smooth };
+const cases = { realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
