@@ -946,8 +946,9 @@ export function createIsland(o) {
     if (opened) { mount(); fit(); home(); }
     try { w.close(); } catch { /* gone */ }
   }
-  // the window may stay smaller than the panel (the browser holds a minimum, or refuses a resize without a user action): then the
-  // panel shrinks to the window instead of being cut off, and the window background is the panel's own, so no empty strip shows
+  // the panel always keeps its size (a shrunk panel made the buttons tiny in a small Dia window). The window may stay smaller than the
+  // panel (the browser holds a minimum, or refuses a resize without a user action): then the panel is pressed to the top left corner and
+  // is cut off on the right and below, until the next press on it grows the window. The window background is the panel's own
   function pipScale() {
     const w = pipWin;
     if (!w) return;
@@ -957,21 +958,21 @@ export function createIsland(o) {
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
     const de = w.document.documentElement;
     const iw = (de.clientWidth || w.innerWidth) - 2 * PIP_PAD, ih = (de.clientHeight || w.innerHeight) - 2 * PIP_PAD;
-    let k = Math.min(1, iw / Math.max(size.w, lw, 1), ih / Math.max(size.h + lh, 1));
-    if (!(k > 0)) k = 1;
-    de.style.setProperty("--vfd-pip-scale", String(k));
+    const fitW = iw >= Math.max(size.w, lw), fitH = ih >= size.h + lh;   // no room: pressed to the left / top edge, not centred
+    de.style.setProperty("--vfd-pip-scale", "1");
     // placement and background are set inline too: some browsers (Dia) do not apply the copied stylesheet rules to the window,
     // and then the panel sat in the top left corner at full size, cut off, on a white page
     pipDoc(w);
     const set = (p, v) => root.style.setProperty(p, v, "important");
     set("position", "fixed");
-    set("left", "50%");
+    const midY = !layer && fitH;
+    set("left", fitW ? "50%" : "0px");
     set("right", "auto");
     set("bottom", "auto");
-    set("top", layer ? "0px" : "50%");
+    set("top", midY ? "50%" : "0px");
     set("margin", "0");
-    set("transform-origin", layer ? "50% 0" : "50% 50%");
-    set("transform", `translate(-50%, ${layer ? "0" : "-50%"}) scale(${k})`);
+    set("transform-origin", `${fitW ? "50%" : "0"} ${midY ? "50%" : "0"}`);
+    set("transform", `translate(${fitW ? "-50%" : "0"}, ${midY ? "-50%" : "0"})`);
     fold.style.setProperty("display", "inline-flex", "important");   // "minimize" lives only in the window: shown inline for the same reason
   }
   const PIP_PROPS = ["position", "left", "right", "bottom", "top", "margin", "transform-origin", "transform"];

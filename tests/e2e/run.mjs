@@ -1309,12 +1309,13 @@ async function narrowPip() {
     await sleep(500);
     const doc = "window.__pip.document";
     const [iw, ihh, right, bottom, left] = await b.ev(`(() => { const r = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); return [window.__pip.innerWidth, window.__pip.innerHeight, r.right, r.bottom, r.left]; })()`);
-    check(right <= iw + 1 && left >= -1, `the island is not cut off at the sides (window ${iw}, island ${left.toFixed(0)}..${right.toFixed(0)})`);
+    check(await b.ev(`(() => { const e = ${doc}.querySelector('.vfd-island'); return e.getBoundingClientRect().width >= e.offsetWidth * 0.99; })()`), "the island keeps its size in a window smaller than the panel");
+    check(left >= -1 && left <= 1 && right > iw, `the island is pressed to the left edge and cut off on the right (window ${iw}, island ${left.toFixed(0)}..${right.toFixed(0)})`);
     check(bottom <= ihh + 1, `the island is not cut off at the bottom (window ${ihh}, island ends ${bottom.toFixed(0)})`);
-    check(await b.ev(`['.vfd-rec', '.vfd-trash', '.vfd-time'].every((q) => { const e = ${doc}.querySelector(q); if (!e) return q === '.vfd-time'; const r = e.getBoundingClientRect(); return r.width > 0 && r.right <= window.__pip.innerWidth + 1; })`), "the stop button and the bin are inside the window");
+    check(await b.ev(`(() => { const r = ${doc}.querySelector('.vfd-rec').getBoundingClientRect(); return r.width >= 20; })()`), "the stop button keeps its size");
     check(await b.ev(`(() => { const d = ${doc}; const c = getComputedStyle(d.documentElement).backgroundColor, k = getComputedStyle(d.body).backgroundColor; const i = getComputedStyle(d.querySelector('.vfd-island')).backgroundColor; return c !== 'rgba(0, 0, 0, 0)' && c === k && c === i; })()`), "the window is painted all over in the island colour");
     check(await b.ev(`(() => { const d = ${doc}; return d.body.getBoundingClientRect().height >= window.__pip.innerHeight - 1; })()`), "the body fills the window");
-    check(await b.ev(`(() => { const r = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); return Math.abs(r.top - (window.__pip.innerHeight - r.bottom)) <= 2 && Math.abs(r.left - (window.__pip.innerWidth - r.right)) <= 2; })()`), "the island sits in the middle of the window, not stuck to a corner");
+    check(await b.ev(`(() => { const r = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); return Math.abs(r.top - (window.__pip.innerHeight - r.bottom)) <= 2; })()`), "the island sits in the middle of the window height");
     check(await b.ev(`getComputedStyle(${doc}.querySelector('.vfd-min')).display !== 'none'`), "the minimize button is shown in the window");
     check(await b.ev("!document.querySelector('.vfd-min') || getComputedStyle(document.querySelector('.vfd-min')).display === 'none'"), "no minimize button on the page");
     if (process.env.VF_SHOTS) {
@@ -1365,10 +1366,10 @@ async function diaPip() {
       fs.writeFileSync(`${process.env.VF_SHOTS}/dia-${process.env.VF_PIP_NAME || "light"}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
     }
     const [iw, ihh, l, t, r, bt] = await b.ev(`(() => { const e = ${doc}.querySelector('.vfd-island').getBoundingClientRect(); const d = ${doc}.documentElement; return [d.clientWidth, d.clientHeight, e.left, e.top, e.right, e.bottom]; })()`);
-    check(l >= -1 && r <= iw + 1 && t >= -1 && bt <= ihh + 1, `the island fits the window (window ${iw}x${ihh}, island ${l.toFixed(0)},${t.toFixed(0)}..${r.toFixed(0)},${bt.toFixed(0)})`);
-    check(Math.abs(l - (iw - r)) <= 2 && Math.abs(t - (ihh - bt)) <= 2, `the island is in the middle of the window (${l.toFixed(0)}/${(iw - r).toFixed(0)}, ${t.toFixed(0)}/${(ihh - bt).toFixed(0)})`);
-    const btns = await b.ev(`['.vfd-rec', '.vfd-trash', '.vfd-min'].map((q) => { const e = ${doc}.querySelector(q); const r = e && e.getBoundingClientRect(); const d = ${doc}.documentElement; return q + ':' + (r ? [r.left, r.top, r.right, r.bottom, r.width].map((x) => x.toFixed(0)).join(',') : 'none') + (r && r.width > 0 && r.left >= -1 && r.top >= -1 && r.right <= d.clientWidth + 1 && r.bottom <= d.clientHeight + 1 ? '' : '!'); }).join(' ')`);
-    check(!btns.includes("!"), `stop, trash and minimize are inside the window (${btns})`);
+    check(await b.ev(`(() => { const e = ${doc}.querySelector('.vfd-island'); return e.getBoundingClientRect().width >= e.offsetWidth * 0.99; })()`), "the island keeps its size, it is not shrunk to the window");
+    check(l >= -1 && l <= 1 && t >= -1 && bt <= ihh + 1, `the island is pressed to the top left corner and is not cut off at the bottom (window ${iw}x${ihh}, island ${l.toFixed(0)},${t.toFixed(0)}..${r.toFixed(0)},${bt.toFixed(0)})`);
+    const btns = await b.ev(`['.vfd-rec', '.vfd-trash', '.vfd-min'].map((q) => { const e = ${doc}.querySelector(q); const r = e && e.getBoundingClientRect(); return q + ':' + (r ? r.width.toFixed(0) : 'none') + (r && r.width >= 20 ? '' : '!'); }).join(' ')`);
+    check(!btns.includes("!"), `stop, trash and minimize keep their size (${btns})`);
     const [hb, bb, ib] = await b.ev(`(() => { const d = ${doc}; return [getComputedStyle(d.documentElement).backgroundColor, getComputedStyle(d.body).backgroundColor, getComputedStyle(d.querySelector('.vfd-island')).backgroundColor]; })()`);
     const solid = (c) => c !== "rgba(0, 0, 0, 0)" && c !== "transparent";
     check(solid(hb) && solid(bb) && hb === bb, `the window is painted one colour (html ${hb}, body ${bb})`);
