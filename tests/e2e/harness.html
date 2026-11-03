@@ -29,6 +29,7 @@ body { background: var(--background); color: var(--foreground); font-family: var
 // hub.lang is undefined (the plugin shows English); a test sets window.__hub.lang to switch the language.
 const Q = new URLSearchParams(location.search);
 const TH = Q.get("theme") || "light";
+if (Q.has("noproc")) delete globalThis.MediaStreamTrackProcessor;   // ?noproc: a browser that cannot process the screen track (no preview in the pen window, the pen stays on the page)
 document.documentElement.classList.add(TH === "dark" ? "t-dark" : TH.startsWith("clean") ? "t-" + TH : "t-light");
 if (TH.startsWith("clean")) document.documentElement.classList.add("th-clean", ...(TH === "clean-dark" ? ["th-clean-dark"] : []));
 // ?bg=light|dark|split: a still "screen" (white, black, or white on the left and black on the right) - the ink colour test

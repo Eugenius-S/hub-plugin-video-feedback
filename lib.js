@@ -14,6 +14,7 @@ export const VOICE = {
 // the chat gets `max` best ones as pictures, all of them go in the archive
 export const FRAMES = { max: 12, every: 500, part: 18 * 1024 * 1024 };
 export const MAX_MS = 10 * 60e3;
+export const WARN_MS = 60e3;   // the island warns this long before the limit
 
 // Phrases. step(t, rms) -> what to do now: {cut: a phrase or null, restart, frame: "onset" | null}.
 // A piece of the recording runs continuously and is cut only in silence, so the first syllable is not lost.

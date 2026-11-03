@@ -9,7 +9,8 @@
 // the text said "The video was not saved"); it is erased from the browser after the hub accepted the message.
 // UI texts and the message to the session: en by default, ru when the hub language is Russian (strings.js, picked by
 // hub.lang at use time).
-import { FRAMES, MAX_MS, VOICE, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, zip } from "./lib.js";
+import { FRAMES, MAX_MS, VOICE, WARN_MS, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, zip } from "./lib.js";
+import { composer } from "./compose.js";
 import { createIsland, icon } from "./island.js";
 import { tr } from "./strings.js";
 
@@ -276,17 +277,22 @@ function record() {
   r.frames = [];        // frames: {t, kind, phrase, blob, n}
   r.waiting = [];       // phrases waiting for transcription
   r.running = 0;
-  r.grab = grabber(r.screen.getVideoTracks()[0], hubRef.url("frame.js"));
   r.ticks = 0;
   r.title = document.title;
   r.tags = [];          // animation tags: {slug, title, t, gone?}
   r.drew = false;
+  // the strokes drawn in the pen window are put on the recorded picture by the composer (null where the browser cannot: then there
+  // is no preview and the pen stays on the page)
+  const track = r.screen.getVideoTracks()[0];
+  r.comp = composer(track, hubRef.url("tick.js"), { active: () => r.island.ink.active(), paint: (...a) => r.island.ink.paint(...a) });
   r.island = createIsland({
     el: hubRef.el, t,
     timecode: () => stamp(performance.now() - r.t0), gallery,
     onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
     onToggle: () => paintAll(), onStop: () => stop(), onDiscard: () => discard(),
+    preview: r.comp ? track : null,   // the pen window shows the screen live and the pen draws on that
   });
+  r.grab = grabber(track, hubRef.url("frame.js"), r.comp);
   r.island.open();
   // the island goes into its own small window at once, for any recording; if the browser wants a click first,
   // the first press on the island or on a plugin button floats it out
@@ -304,7 +310,7 @@ function record() {
     r.whole = piece(r.mic, (b) => put(r, `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
   }
   // the screen video goes only to IndexedDB, not memory: it reaches the hub even if the recording is cut off
-  try { r.video = piece(r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
+  try { r.video = piece(r.comp?.stream || r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
   catch { r.video = null; }   // the browser cannot record video - frames and audio are saved anyway
   saveMeta(r);
   // the timer lives in a separate thread: the hub tab is usually out of sight during a recording and the browser throttles its timers
@@ -332,7 +338,13 @@ function piece(stream, onChunk, slice, kind = AUDIO) {
 async function tick(r) {
   if (R !== r || r.phase !== "rec") return;
   const t = performance.now() - r.t0;
-  if (t >= MAX_MS) return stop();
+  if (t >= MAX_MS) { r.limit = true; return stop(); }
+  if (t >= MAX_MS - WARN_MS && !r.warned) {   // a minute before the limit: the recording would end by itself, silently
+    r.warned = true;
+    const note = tr(lang(), "limit_soon", { min: MAX_MS / 60e3 });
+    r.island?.note(note, 10000);
+    banner(note, 10000);
+  }
   r.ticks++;
   if (r.ticks % 20 === 0) saveMeta(r);   // the length, in case the tab is reloaded in the middle of a recording
   if (r.ticks % 4 === 0) {
@@ -422,7 +434,7 @@ async function shoot(r, t, kind, extra) {
 
 // a screen shot: JPEG with the long side up to EDGE. The page only takes the frame (ImageCapture, or a bitmap of the video);
 // scaling and encoding go to a worker, so the pen and the island on the page keep their frame rate. No worker: the same on the page.
-function grabber(track, workerUrl) {
+function grabber(track, workerUrl, comp) {
   const cap = "ImageCapture" in window ? new ImageCapture(track) : null;
   let video = null, worker = null, n = 0;
   const wait = new Map();
@@ -435,8 +447,9 @@ function grabber(track, workerUrl) {
     }
   } catch { worker = null; }
   const grab = async () => {
-    let src;
-    if (cap) src = await cap.grabFrame();
+    let src = comp ? await comp.bitmap() : null;   // the picture with the strokes on it
+    if (src) { /* taken */ }
+    else if (cap) src = await cap.grabFrame();
     else {
       if (!video) { video = document.createElement("video"); video.muted = true; video.srcObject = new MediaStream([track]); await video.play(); }
       src = await createImageBitmap(video);
@@ -461,6 +474,7 @@ function grabber(track, workerUrl) {
   return grab;
 }
 
+let limitNote = "";   // set when the recording ended at the limit: said on the page until the delivery is done
 async function stop() {
   const r = R;
   if (!r) return;
@@ -468,6 +482,7 @@ async function stop() {
   if (r.phase !== "rec") return;
   r.phase = "work";
   const length = performance.now() - r.t0;
+  limitNote = r.limit ? t("limit_stop", { min: MAX_MS / 60e3, time: clock(length) }) : "";
   r.worker.terminate();
   document.title = r.title;
   paintAll();
@@ -483,7 +498,7 @@ async function stop() {
   try {
     progress(r);
     await drained(r);
-    banner(t("sending"));
+    banner(limitNote ? `${limitNote} ${t("sending")}` : t("sending"));
     r.length = length;
     r.stopped = true;
     const screen = video ? await video : null;   // the whole screen video (the chunks are also in IndexedDB, in case sending breaks off)
@@ -602,7 +617,9 @@ async function deliver(job, ctx) {
     await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
     await forget(job.id);
     pending = pending.filter((x) => x.id !== job.id);
-    banner(sentSummary(job.list.length, sent.archive?.length ? job.frames.length : frames.length, lang()), 4000);
+    const sum = sentSummary(job.list.length, sent.archive?.length ? job.frames.length : frames.length, lang());
+    banner(limitNote ? `${limitNote} ${sum}` : sum, limitNote ? 12000 : 4000);
+    limitNote = "";
     return true;
   } catch (e) {
     banner(t("not_sent", { err: e?.message || e }), 15000);
@@ -712,6 +729,7 @@ function release(r) {
   r.island?.destroy();
   r.unconfine?.();
   r.grab?.close();
+  r.comp?.close();
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());
   r.audio?.close();
 }

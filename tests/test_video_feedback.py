@@ -53,7 +53,7 @@ class Source(unittest.TestCase):
         js = read("main.js")
         self.assertEqual(js.count("new MediaRecorder("), 1)            # one recorder for voice and screen
         self.assertIn("new MediaRecorder(stream", js)
-        self.assertIn("piece(r.screen,", js)
+        self.assertIn("piece(r.comp?.stream || r.screen,", js)       # the picture with the strokes on it, the raw screen where the browser cannot compose
         self.assertIn('durability: "strict"', js)
         self.assertIn("await forget(job.id)", js)                      # erase after delivery
         self.assertIn("data-hub-hold", js)                             # the page does not reload in the middle of a recording
@@ -102,7 +102,7 @@ class Source(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "needs node")
     def test_scripts_parse_and_logic_holds(self):
-        for name in ("main.js", "lib.js", "island.js", "tick.js", "frame.js", "strings.js"):
+        for name in ("main.js", "lib.js", "island.js", "compose.js", "tick.js", "frame.js", "strings.js"):
             r = subprocess.run(["node", "--check", os.path.join(ROOT, name)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
         r = subprocess.run(["node", "--test", os.path.join(ROOT, "tests", "lib.test.mjs")], capture_output=True, text=True)
@@ -138,7 +138,7 @@ class Languages(unittest.TestCase):
     """UI strings and the message to the session: en by default, ru for a Russian hub; picked at use time by hub.lang."""
 
     def test_russian_text_only_in_the_ru_table(self):
-        for name in ("main.js", "lib.js", "island.js", "tick.js", "frame.js", "style.css", "README.md", "tests/e2e/harness.html"):
+        for name in ("main.js", "lib.js", "island.js", "compose.js", "tick.js", "frame.js", "style.css", "README.md", "tests/e2e/harness.html"):
             self.assertFalse(CYR.search(read(name)), name)
         js = read("strings.js")
         head, ru = js.split("\n  ru: {", 1)                           # everything before the ru table is English
