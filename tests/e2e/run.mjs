@@ -1238,6 +1238,7 @@ const fakePip = (gesture) => `(() => {
     Object.defineProperty(w, "moveTo", { configurable: true, value: (x, y) => { g.x = x; g.y = y; clamp(); apply(); } });
     window.__pipGeo = () => ({ x: g.x, y: g.y, w: g.w, h: g.h, right: g.x + g.w, bottom: g.y + g.h });
     window.__pipPlace = (x, y) => { g.x = x; g.y = y; clamp(); apply(); };
+    window.__pipUserSize = (nw, nh) => { g.w = nw + CH.w; g.h = nh + CH.h; clamp(); apply(); };   // the person pulls an edge
     window.__pip = w;
     return w;
   } } });
@@ -1757,7 +1758,48 @@ async function collapsePip() {
   } finally { b2.close(); h2.close(); }
 }
 
-const cases = { collapse, collapsePip, realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+// 17c. a window the person sized stays as it is (a press in it does not set it back to the panel's size); the pen on a hub tab that is not
+// on screen is dimmed with a tip, and comes back with the tab
+async function pipUser() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    await sleep(3200);   // the browser has settled the new window
+    const doc = "window.__pip.document";
+    const g0 = await b.ev("window.__pipGeo()");
+    const snap = async (name) => {   // the fake window sits off the screen: bring it on, cut it out of the page
+      if (!process.env.VF_SHOT_DIR) return;
+      await b.ev("window.__pipVisible = true; window.__pipPlace(40, 160); 0");
+      const g = await b.ev("window.__pipGeo()");
+      await shotOf(b, name, { x: g.x, y: g.y, width: g.w, height: g.h - 32, scale: 1 });
+      await b.ev("window.__pipVisible = false; document.getElementById('fakepip').style.left = '-5000px'; 0");
+    };
+    await snap("pip-window");
+    await b.ev(`window.__pipUserSize(${g0.w + 120}, ${g0.h - 32 + 60})`);
+    await sleep(300);
+    await b.ev(`${doc}.querySelector('.vfd-island').dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))`);
+    await sleep(500);
+    const g1 = await b.ev("window.__pipGeo()");
+    check(g1.w === g0.w + 120 && g1.h === g0.h + 60, `a press does not set the window the person sized back (${g0.w}x${g0.h} -> ${g1.w}x${g1.h})`);
+    await b.ev(`${doc}.querySelector('.vfd-btn[data-tool=pencil]').click()`);
+    check(await b.ev(`!${doc}.querySelector('.vfd-root').classList.contains('vfd-paused')`), "the hub tab is on screen: the pen is not dimmed");
+    await b.ev(`Object.defineProperty(document, "hidden", { configurable: true, get: () => true }); document.dispatchEvent(new Event("visibilitychange"))`);
+    check(await b.ev(`${doc}.querySelector('.vfd-root').classList.contains('vfd-paused') && !!${doc}.querySelector('.vfd-btn[data-tool=pencil]').title`), "the tab is off screen: the pen is dimmed with a tip");
+    await snap("pip-window-paused");
+    await b.ev(`Object.defineProperty(document, "hidden", { configurable: true, get: () => false }); document.dispatchEvent(new Event("visibilitychange"))`);
+    check(await b.ev(`!${doc}.querySelector('.vfd-root').classList.contains('vfd-paused') && !${doc}.querySelector('.vfd-btn[data-tool=pencil]').title`), "back on the tab: the pen is as before");
+    await b.ev(`${doc}.querySelector('.vfd-rec').click()`);
+    await until(() => h.sends.length, "the recording is sent", 60000);
+  } finally { b.close(); h.close(); }
+}
+
+const cases = { pipUser, collapse, collapsePip, realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

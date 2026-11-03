@@ -238,3 +238,5 @@ html.th-clean .slot-composer-tools .btn.round.vf-btn > .vf-time { width: auto; h
 html.th-clean .slot-composer-tools .btn.round.vf-btn > .vf-num { width: auto; height: auto; }
 html.th-clean .vfd-btn[aria-pressed="true"], html.th-clean .vfd-btn[aria-expanded="true"] { background: var(--c-fill, var(--front-soft)); color: var(--c-t1, var(--foreground)); }
 html.th-clean .vfd-toast .vfd-i, html.th-clean .vfd-toast-undo { color: var(--c-t1, var(--foreground)); }
+
+.vfd-root.vfd-paused .vfd-btn[data-tool] { opacity: .4; }   /* the pen draws on the hub tab: while it is not on screen the tools are dimmed */

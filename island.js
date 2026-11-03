@@ -177,11 +177,13 @@ export function createIsland(o) {
     const w = pipWin;
     if (on && w) unfolded = [w.outerWidth, w.outerHeight];
     collapsed = on;
+    userSized = false;   // folding is the person's own wish for the size: the window follows the strip
     if (!opened) return;
     closePop(); closeColor(); dismissToast(); tipOff();
     home();
     pipFit();   // the window follows the strip, and comes back to the size it had when it is unfolded
     if (!on && w && unfolded) {
+      fitAt = performance.now();
       try { w.resizeTo(Math.max(unfolded[0], w.outerWidth), Math.max(unfolded[1], w.outerHeight)); } catch { /* no user action */ }
       pipScale();
     }
@@ -218,6 +220,18 @@ export function createIsland(o) {
     frame();
   }
 
+  // the pen draws on the hub page: while that tab is not on screen (the island floats over another tab) the strokes cannot land there.
+  // The tools dim and say so in a native tip (the island's own tips are off in the small window); they come back with the tab
+  const paused = () => !!pipWin && document.hidden;
+  const syncPaused = () => {
+    const off = paused();
+    root.classList.toggle("vfd-paused", off);
+    for (const b of tools) {
+      if (off) b.title = o.t("draw_paused");
+      else b.removeAttribute("title");
+    }
+  };
+  document.addEventListener("visibilitychange", syncPaused);
   function pick(id) {
     tool = id;
     for (const b of tools) b.setAttribute("aria-pressed", String(b.dataset.tool === id));
@@ -357,6 +371,7 @@ export function createIsland(o) {
   const size = { w: 0, h: 0 };
   let k = 1;   // the island's scale (in full screen it grows with the screen, see scale())
   // the window the island lives in: the hub page, or the Picture-in-Picture window while it floats there
+  let userSized = false, fitAt = 0;   // the person pulled the window's edge: it is not set back to the panel's size on every press
   let win = window, pipBroken = false, pipWin = null, pipAuto = false, pipRO = null, pipTick = 0, pipBg = "";
   const vw = () => win.innerWidth, vh = () => win.innerHeight;
   const measure = () => { size.w = root.offsetWidth * k; size.h = root.offsetHeight * k; };   // scale does not change layout sizes: they are multiplied
@@ -926,7 +941,7 @@ export function createIsland(o) {
     if (!opened || pipWin) { w.close(); return false; }
     copyStyles(w.document);
     w.document.body.className = document.body.className;
-    pipWin = w; win = w; pipAuto = !!auto;
+    pipWin = w; win = w; pipAuto = !!auto; userSized = false;
     pipBg = getComputedStyle(root).getPropertyValue("--vfd-surface").trim();   // the theme surface, read while the page styles still apply
     root.classList.add("vfd-pip");
     root.style.transform = "";
@@ -944,7 +959,7 @@ export function createIsland(o) {
       leavePip();
       if (fs) { if (opened) { mount(); fit(); home(); } } else close();
     });
-    w.addEventListener("resize", pipScale);
+    w.addEventListener("resize", pipResized);
     // the styles and fonts of the new window arrive after it opens: the panel changes size then, the scale follows it
     try { pipRO = new w.ResizeObserver(pipScale); pipRO.observe(root); pipRO.observe(w.document.documentElement); } catch { /* no observer: the resize event and the fit are enough */ }
     // a browser may resize the new window without a resize event (Dia opens it small): look again for a moment after opening
@@ -958,6 +973,7 @@ export function createIsland(o) {
       if (ticks === 12 && ((de.clientWidth || w.innerWidth || 0) < PIP_MIN.w || (de.clientHeight || w.innerHeight || 0) < PIP_MIN.h)) { pipBroken = true; closePip(); }
     }, 100);
     pipScale();
+    syncPaused();
     home();
     o.onFloat?.(true);
     return true;
@@ -968,7 +984,7 @@ export function createIsland(o) {
     if (!w) return null;
     pipWin = null; win = window; pipAuto = false;
     w.removeEventListener("keydown", keys);
-    w.removeEventListener("resize", pipScale);
+    w.removeEventListener("resize", pipResized);
     try { w.document.removeEventListener("pointerdown", pipPress, true); } catch { /* gone */ }
     if (pipRO) { pipRO.disconnect(); pipRO = null; }
     if (pipTick) { clearInterval(pipTick); pipTick = 0; }
@@ -977,6 +993,7 @@ export function createIsland(o) {
     closePop(); closeColor(); dismissToast(); tipOff();
     root.classList.remove("vfd-pip", "vfd-layer");
     root.style.transform = "";
+    syncPaused();
     float.hidden = !canPip();
     o.onFloat?.(false);
     return w;
@@ -1031,9 +1048,13 @@ export function createIsland(o) {
       s.setProperty("background", bg, "important");
     }
   }
+  function pipResized() {
+    if (!pipTick && performance.now() - fitAt > 500) userSized = true;   // not ours and not the browser settling the new window: the person dragged an edge
+    pipScale();
+  }
   function pipPress() {
     const w = pipWin;
-    if (!w) return;
+    if (!w || userSized) return;
     const lay = pop || cpop || toast;
     if (lay) return;   // a popover is open: its own click already fits the window
     setTimeout(pipFit, 0);
@@ -1046,16 +1067,18 @@ export function createIsland(o) {
     measure();
     const layer = pop || cpop || toast;
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
-    const nw = Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth);
-    const nh = Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight);
+    let nw = Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth);
+    let nh = Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight);
     pipScale();
     const ow = w.outerWidth, oh = w.outerHeight, x = w.screenX, y = w.screenY;
+    if (userSized) { nw = Math.max(nw, ow); nh = Math.max(nh, oh); }   // a window the person sized is only grown when the panel no longer fits, never shrunk or set back
     if (nw === ow && nh === oh) return;
     // the window keeps the screen corner it is pressed to: a plain resize holds the top left, and a window by the right or bottom
     // edge is pushed back onto the screen (it jumped to the top and came back). The side nearer to the edge of the screen stays put
     const sc = w.screen, l = sc.availLeft || 0, t = sc.availTop || 0;
     const right = l + sc.availWidth - (x + ow) < x - l, bottom = t + sc.availHeight - (y + oh) < y - t;
     const nx = right ? x + ow - nw : x, ny = bottom ? y + oh - nh : y;
+    fitAt = performance.now();
     try {
       // growing: move first (nothing is pushed back), shrinking: resize first
       if (nw * nh > ow * oh) { w.moveTo(nx, ny); w.resizeTo(nw, nh); } else { w.resizeTo(nw, nh); w.moveTo(nx, ny); }
