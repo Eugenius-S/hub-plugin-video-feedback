@@ -129,12 +129,12 @@ const GALLERY = [
 // ───── Chrome over CDP ─────
 // VF_SHOT_DIR: a few snapshots of the full screen and the floating island, for showing (numbered in the order taken)
 let shotN = 0;
-const shotOf = async (b, name) => {
+const shotOf = async (b, name, clip) => {
   const dir = process.env.VF_SHOT_DIR;
   if (!dir) return;
   fs.mkdirSync(dir, { recursive: true });
   await sleep(250);
-  fs.writeFileSync(`${dir}/${String(++shotN).padStart(2, "0")}-${name}.png`, Buffer.from((await b.page("Page.captureScreenshot", { format: "png" })).data, "base64"));
+  fs.writeFileSync(`${dir}/${String(++shotN).padStart(2, "0")}-${name}.png`, Buffer.from((await b.page("Page.captureScreenshot", clip ? { format: "png", clip: { ...clip, scale: 2 } } : { format: "png" })).data, "base64"));
 };
 async function launch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-chrome-"));   // a fresh profile: the cache of an old main.js does not interfere
@@ -1668,7 +1668,96 @@ async function realPip() {
   } finally { b.close(); h.close?.(); }
 }
 
-const cases = { realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+// 17. fold / unfold: a strip with the grip, the stop button, unfold and close (and the tool in hand); the pen keeps working while
+// folded; the state is kept by a new island (a redraw, the next recording); in the window the window follows the strip and comes
+// back to its size
+async function collapse() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    const shown = (q) => b.ev(`(() => { const e = document.querySelector('${q}'); return !!e && getComputedStyle(e).display !== 'none' && !e.hidden; })()`);
+    const width = () => b.ev("document.querySelector('.vfd-island').getBoundingClientRect().width");
+    check(await shown(".vfd-collapse") && await shown(".vfd-btn[data-act=close]"), "the island has fold and close buttons");
+    const full = await width();
+    const strip = () => b.ev("(() => { const r = document.querySelector('.vfd-island').getBoundingClientRect(); return { x: Math.max(0, r.x - 20), y: Math.max(0, r.y - 14), width: r.width + 40, height: r.height + 28 }; })()");
+    await shotOf(b, "island-unfolded", await strip());
+    await tool(b, "pencil");
+    await b.ev("document.querySelector('.vfd-collapse').click()");
+    check(await b.ev("document.querySelector('.vfd-root').classList.contains('is-collapsed')"), "folded");
+    await shotOf(b, "island-folded", await strip());
+    check(!(await shown('.vfd-btn[data-tool="rect"]')) && !(await shown(".vfd-color")) && !(await shown(".vfd-trash")), "folded: the other tools, the colour and the bin are gone");
+    check(await shown(".vfd-rec") && await shown(".vfd-grip") && await shown(".vfd-collapse") && await shown(".vfd-btn[data-act=close]") && await shown('.vfd-btn[data-tool="pencil"]'), "folded: grip, stop, unfold, close and the tool in hand stay");
+    check(await width() < full * 0.7, `folded: the island is narrower (${full} -> ${await width()})`);
+    check(await b.ev("document.querySelector('.vfd-collapse').getAttribute('aria-label')") === "Unfold", "the fold button says Unfold");
+    await drag(b, [200, 200], [400, 240]);
+    check(await b.ev("globalThis.__videoFeedback().island.strokes()") === 1, "the pen draws while the island is folded");
+    check(await b.ev("localStorage.getItem('hub-video-feedback:island-collapsed')") === "1", "the state is remembered");
+    // a new island (the next recording, a redraw) comes up folded
+    await b.ev("document.querySelector('.vfd-rec').click()");
+    await until(() => h.sends.length, "the recording is sent", 60000);
+    await load(b, h, "?bg=light");
+    await view(b);
+    await island(b);
+    check(await b.ev("document.querySelector('.vfd-root').classList.contains('is-collapsed')"), "a new island comes up folded");
+    await b.ev("document.querySelector('.vfd-collapse').click()");
+    check(await shown('.vfd-btn[data-tool="rect"]') && await shown(".vfd-color"), "unfolded: all the tools are back");
+    check(Math.abs((await width()) - full) < 2, `unfolded: the island has its size again (${full} -> ${await width()})`);
+    check(await phase(b) === "rec", "the recording goes on");
+    await b.ev("document.querySelector('.vfd-btn[data-act=close]').click()");
+    check(await b.ev("!document.querySelector('.vfd-island')"), "close takes the island off the page");
+  } finally { b.close(); h.close(); }
+}
+
+// 17b. in the window: folding shrinks the window to the strip, unfolding gives back its size; a window the browser opened with no size
+// (Dia under some set-ups: nothing in it can be pressed) sends the island back to the page, where the pen works
+async function collapsePip() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light");
+    await view(b);
+    await b.ev(fakePip(false));
+    await record(b, 0);
+    await until(() => b.ev(inPip), "the island opened in its own window", 10000);
+    const doc = "window.__pip.document";
+    await sleep(600);
+    const full = await b.ev("window.__pipGeo().w");
+    await b.ev(`${doc}.querySelector('.vfd-collapse').click()`);
+    await sleep(500);
+    const small = await b.ev("window.__pipGeo().w");
+    check(small < full * 0.7, `the window follows the strip (${full} -> ${small})`);
+    check(await b.ev(`getComputedStyle(${doc}.querySelector('.vfd-min')).display`) === "none", "folded: back-to-page is not shown");
+    await b.ev(`${doc}.querySelector('.vfd-collapse').click()`);
+    await sleep(500);
+    check(await b.ev("window.__pipGeo().w") === full, "unfolded: the window has its size again");
+    await b.ev(`${doc}.querySelector('.vfd-rec').click()`);
+    await until(() => h.sends.length, "the recording is sent", 60000);
+  } finally { b.close(); h.close(); }
+  const h2 = newHub();
+  await h2.listen();
+  const b2 = await launch();
+  try {
+    await load(b2, h2, "?bg=light");
+    await view(b2);
+    await b2.ev(fakePip(false));
+    await b2.ev("window.__pipFixed = { w: 0, h: 0 }");
+    await record(b2, 0);
+    await until(() => b2.ev("!!document.querySelector('.vfd-root') && !window.__pip?.document?.querySelector?.('.vfd-root')"), "the island came back to the page from the empty window", 10000);
+    check(await b2.ev("globalThis.__videoFeedback().island.isFloating()") === false, "the empty window is let go");
+    await tool(b2, "pencil");
+    await drag(b2, [200, 200], [400, 240]);
+    check(await b2.ev("globalThis.__videoFeedback().island.strokes()") === 1, "the pen draws on the page");
+    await sleep(500);
+    check(await b2.ev("window.__pipTries") === 1, "it does not float again by itself");
+  } finally { b2.close(); h2.close(); }
+}
+
+const cases = { collapse, collapsePip, realPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

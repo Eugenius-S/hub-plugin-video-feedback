@@ -15,6 +15,8 @@ import { COLORS, DRAW, INK_KEY, count, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb,
 
 const NS = "http://www.w3.org/2000/svg";
 const POS = "hub-video-feedback:island";
+const COLLAPSED = "hub-video-feedback:island-collapsed";   // the island is folded to a strip: kept, so a new island (a redraw, the next recording) comes up folded too
+const PIP_MIN = { w: 80, h: 40 };   // a window smaller than this is no use: some browsers open the window with no size at all
 const EDGE = 8;        // the popover and the toast keep this far from the screen edge, and sit this far under the island
 const PIP_PAD = 0;     // the island's margin inside the Picture-in-Picture window: none, the window is the island
 const SHOWN = 60;      // cards drawn at once in the popover
@@ -32,6 +34,8 @@ const ICONS = {
   fsExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
   trash: "M 10 2 L 9 3 L 5 3 L 4 3 L 4 5 L 5 5 L 5 20 C 5 21.093063 5.9069372 22 7 22 L 17 22 C 18.093063 22 19 21.093063 19 20 L 19 5 L 20 5 L 20 3 L 19 3 L 18 3 L 15 3 L 14 2 L 10 2 z M 7 5 L 17 5 L 17 20 L 7 20 L 7 5 z",
   min: "M6 19h12v2H6z",
+  fold: "M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z",     // chevron left: fold the island to a strip
+  unfold: "M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z",   // chevron right: unfold it
   close: "M 4.7070312 3.2929688 L 3.2929688 4.7070312 L 10.585938 12 L 3.2929688 19.292969 L 4.7070312 20.707031 L 12 13.414062 L 19.292969 20.707031 L 20.707031 19.292969 L 13.414062 12 L 20.707031 4.7070312 L 19.292969 3.2929688 L 12 10.585938 L 4.7070312 3.2929688 z",
   search: "M 9 2 C 5.1458514 2 2 5.1458514 2 9 C 2 12.854149 5.1458514 16 9 16 C 10.747998 16 12.345009 15.348024 13.574219 14.28125 L 14 14.707031 L 14 16 L 20 22 L 22 20 L 16 14 L 14.707031 14 L 14.28125 13.574219 C 15.348024 12.345009 16 10.747998 16 9 C 16 5.1458514 12.854149 2 9 2 z M 9 4 C 11.773268 4 14 6.2267316 14 9 C 14 11.773268 11.773268 14 9 14 C 6.2267316 14 4 11.773268 4 9 C 4 6.2267316 6.2267316 4 9 4 z",
 };
@@ -57,6 +61,8 @@ export function createIsland(o) {
   let ink = DRAW.ink;
   try { ink = inkColor(localStorage.getItem(INK_KEY)) || ink; } catch { /* no storage */ }
   let pop = null, find = null, grid = null, clockTimer = 0, toast = null, toastTimer = 0, retry = 0, tip = null;
+  let collapsed = false, unfolded = null;   // the island is folded to a strip; the size of its window before it was folded
+  try { collapsed = localStorage.getItem(COLLAPSED) === "1"; } catch { /* no storage */ }
   let cpop = null, cpaint = null;   // the colour popover, and its repaint from a colour that came from outside
 
   const root = o.el("div", "vfd-root");
@@ -119,9 +125,14 @@ export function createIsland(o) {
   float.dataset.act = "pip";
   float.hidden = !globalThis.documentPictureInPicture?.requestWindow;
   // the way back: only in the window, puts the island back onto the page (the window is closed, the drawing goes on)
-  const fold = btn(o.t("draw_min"), "min");
+  const fold = btn(o.t("draw_back"), "min");
   fold.dataset.act = "min";
   fold.classList.add("vfd-min");
+  // fold / unfold: leaves the grip, the stop button, this button and "close" (and the tool in hand); the window keeps its place and the
+  // pen keeps working. The state is remembered
+  const shrink = btn(o.t("draw_min"), "fold");
+  shrink.dataset.act = "collapse";
+  shrink.classList.add("vfd-collapse");
   // the stop button: the red dot and the running time, as the hub's record button; only while the screen is recorded
   const sepRec = o.el("span", "vfd-sep");
   const rec = o.el("button", "vfd-btn vfd-rec");
@@ -135,7 +146,7 @@ export function createIsland(o) {
   trash.dataset.act = "discard";
   trash.dataset.tip = o.t("rec_trash");
   sepRec.hidden = trash.hidden = rec.hidden = true;
-  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, rec, o.el("span", "vfd-sep"), float, fold, shut);
+  bar.append(grip, swatch, o.el("span", "vfd-sep"), ...tools, sepMg, mg, sepRec, trash, rec, o.el("span", "vfd-sep"), float, fold, shrink, shut);
   rec.addEventListener("click", () => { o.onStop?.(); close(); });
   trash.addEventListener("click", () => { o.onDiscard?.(); close(); });
   // recording(time): the screen is recorded, the button shows the running time; recording(null): it is hidden again
@@ -154,6 +165,29 @@ export function createIsland(o) {
   shut.addEventListener("click", () => close());
   float.addEventListener("click", () => floatOut());
   fold.addEventListener("click", () => closePip());
+  shrink.addEventListener("click", () => setCollapsed(!collapsed, true));
+  function setCollapsed(on, save) {
+    root.classList.toggle("is-collapsed", on);
+    const label = o.t(on ? "draw_expand" : "draw_min");
+    shrink.dataset.tip = label;
+    shrink.setAttribute("aria-label", label);
+    shrink.firstChild.firstChild.setAttribute("d", ICONS[on ? "unfold" : "fold"]);
+    if (save) { try { localStorage.setItem(COLLAPSED, on ? "1" : "0"); } catch { /* no storage */ } }
+    if (on === collapsed) return;
+    const w = pipWin;
+    if (on && w) unfolded = [w.outerWidth, w.outerHeight];
+    collapsed = on;
+    if (!opened) return;
+    closePop(); closeColor(); dismissToast(); tipOff();
+    home();
+    pipFit();   // the window follows the strip, and comes back to the size it had when it is unfolded
+    if (!on && w && unfolded) {
+      try { w.resizeTo(Math.max(unfolded[0], w.outerWidth), Math.max(unfolded[1], w.outerHeight)); } catch { /* no user action */ }
+      pipScale();
+    }
+    if (!on) unfolded = null;
+  }
+  setCollapsed(collapsed);
 
   // tooltip: under the button, for the pointer and for the keyboard (not in the small window: there is no room under the island)
   const tipOn = (e) => {
@@ -188,7 +222,7 @@ export function createIsland(o) {
     tool = id;
     for (const b of tools) b.setAttribute("aria-pressed", String(b.dataset.tool === id));
     canvas.classList.toggle("vf-on", !!id);   // no tool: the page under the canvas is clickable again
-    if (id) { closePop(); closeColor(); }
+    if (id) { closePop(); closeColor(); if (pipWin) { try { window.focus(); } catch { /* not allowed */ } } }   // the pen is in the window, the drawing on the page: the first stroke must not be eaten by focusing it
   }
 
   // Drawing stays off the pointer handlers: they only record points (no layout reads, no painting); one animation frame paints
@@ -323,7 +357,7 @@ export function createIsland(o) {
   const size = { w: 0, h: 0 };
   let k = 1;   // the island's scale (in full screen it grows with the screen, see scale())
   // the window the island lives in: the hub page, or the Picture-in-Picture window while it floats there
-  let win = window, pipWin = null, pipAuto = false, pipRO = null, pipTick = 0, pipBg = "";
+  let win = window, pipBroken = false, pipWin = null, pipAuto = false, pipRO = null, pipTick = 0, pipBg = "";
   const vw = () => win.innerWidth, vh = () => win.innerHeight;
   const measure = () => { size.w = root.offsetWidth * k; size.h = root.offsetHeight * k; };   // scale does not change layout sizes: they are multiplied
   const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, vw() - size.w - 4)),
@@ -915,7 +949,14 @@ export function createIsland(o) {
     try { pipRO = new w.ResizeObserver(pipScale); pipRO.observe(root); pipRO.observe(w.document.documentElement); } catch { /* no observer: the resize event and the fit are enough */ }
     // a browser may resize the new window without a resize event (Dia opens it small): look again for a moment after opening
     let ticks = 0;
-    pipTick = setInterval(() => { if (pipWin !== w || ++ticks > 25) { clearInterval(pipTick); pipTick = 0; } else pipScale(); }, 100);
+    pipTick = setInterval(() => {
+      if (pipWin !== w || ++ticks > 25) { clearInterval(pipTick); pipTick = 0; return; }
+      pipScale();
+      // the browser gave a window with no size (Dia under some set-ups): nothing in it can be pressed, so the pen could never be picked.
+      // The island goes back to the page and does not float by itself again
+      const de = w.document.documentElement;
+      if (ticks === 12 && ((de.clientWidth || w.innerWidth || 0) < PIP_MIN.w || (de.clientHeight || w.innerHeight || 0) < PIP_MIN.h)) { pipBroken = true; closePip(); }
+    }, 100);
     pipScale();
     home();
     o.onFloat?.(true);
@@ -973,7 +1014,7 @@ export function createIsland(o) {
     set("margin", "0");
     set("transform-origin", `${fitW ? "50%" : "0"} ${midY ? "50%" : "0"}`);
     set("transform", `translate(${fitW ? "-50%" : "0"}, ${midY ? "-50%" : "0"})`);
-    fold.style.setProperty("display", "inline-flex", "important");   // "minimize" lives only in the window: shown inline for the same reason
+    fold.style.setProperty("display", collapsed ? "none" : "inline-flex", "important");   // "back to the page" lives only in the window: shown inline for the same reason
   }
   const PIP_PROPS = ["position", "left", "right", "bottom", "top", "margin", "transform-origin", "transform"];
   function pipDoc(w) {
@@ -1028,7 +1069,7 @@ export function createIsland(o) {
   let armed = null;
   const disarm = () => { if (armed) { document.removeEventListener("pointerdown", armed, true); armed = null; } };
   function arm(also) {
-    if (armed || !opened || pipWin) return;
+    if (armed || !opened || pipWin || pipBroken) return;
     armed = (e) => {
       if (!root.contains(e.target) && !also?.(e.target)) return;
       disarm();
@@ -1038,7 +1079,7 @@ export function createIsland(o) {
     document.addEventListener("pointerdown", armed, true);
   }
   async function floatForScreen(also) {
-    if (!opened || pipWin || !canPip()) return !!pipWin;
+    if (!opened || pipWin || pipBroken || !canPip()) return !!pipWin;
     if (await floatOut(false)) return true;
     arm(also);
     return false;

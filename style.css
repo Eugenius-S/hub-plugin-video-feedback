@@ -34,6 +34,9 @@
 .vfd-root.vfd-pip .vfd-rec .vf-time { min-width: 5ch; }   /* room for 10:00: the window cannot always grow */
 .vfd-pip-doc, .vfd-pip-doc body { margin: 0; width: 100%; height: 100%; background: var(--vfd-surface, #111); overflow: hidden; }
 .vfd-root .vfd-min { display: none; }
+/* folded: a strip with the grip, the stop button, unfold and close; the tool in hand stays to be put down */
+.vfd-root.is-collapsed .vfd-island > :is(.vfd-btn, .vfd-sep):not(.vfd-rec):not(.vfd-collapse):not([data-act="close"]):not([aria-pressed="true"]) { display: none; }
+.vfd-root.is-collapsed .vfd-island > .vfd-sep { display: none; }
 .vfd-root.vfd-pip .vfd-min { display: inline-flex; }
 /* a <video> or <img> that went fullscreen is shown by our own box (a copy), so the island and the drawing can live inside it */
 .vfd-viewer { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; z-index: 2147482000; }
