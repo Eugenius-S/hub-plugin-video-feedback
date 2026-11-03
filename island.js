@@ -14,7 +14,7 @@
 // the page, and is dimmed while the hub tab is out of sight.
 // A Motion Gallery button (only when that plugin answers) opens a popover with posters; a pick tags the animation at the
 // current moment of the video. The look follows the designer's mock-up (vfd-* classes in style.css, tokens of the hub theme).
-import { COLORS, DRAW, INK_KEY, count, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb, inkColor, matchItem, mediaUrl, rgb2hex, rgb2hsv } from "./lib.js";
+import { COLORS, DRAW, INK_KEY, count, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb, inkColor, isMac, matchItem, mediaUrl, rgb2hex, rgb2hsv } from "./lib.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const POS = "hub-video-feedback:island";
@@ -127,7 +127,7 @@ export function createIsland(o) {
   // there is no way back, the island can only be closed (the window's cross or ours)
   const float = btn(o.t("draw_pip"), "pip");
   float.dataset.act = "pip";
-  float.hidden = !globalThis.documentPictureInPicture?.requestWindow;
+  float.hidden = isMac() || !globalThis.documentPictureInPicture?.requestWindow;
   // the way back: only in the window, puts the island back onto the page (the window is closed, the drawing goes on)
   const fold = btn(o.t("draw_back"), "min");
   fold.dataset.act = "min";
@@ -984,7 +984,7 @@ export function createIsland(o) {
   // Picture-in-Picture: the island in a small window of its own that the OS keeps above every other window, even over a fullscreen
   // video and over other applications. Only the island moves there: the drawing stays on the hub page (a browser cannot draw over
   // other programs). The window needs a user action (a click, letting go of the grip, the player's fullscreen button).
-  const canPip = () => !!globalThis.documentPictureInPicture?.requestWindow;
+  const canPip = () => !isMac() && !!globalThis.documentPictureInPicture?.requestWindow;
   const copyStyles = (to) => {
     for (const a of document.documentElement.attributes) to.documentElement.setAttribute(a.name, a.value);
     to.documentElement.classList.add("vfd-pip-doc");

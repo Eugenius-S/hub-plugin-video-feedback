@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { COLORS, DRAW, FRAMES, INK_KEY, VOICE, bundles, clock, count, fadeAlpha, fmtDuration, frameName, hex2rgb, hsv2rgb, inkColor, matchItem, rgb2hex, rgb2hsv,
-  mediaUrl, message, phrases, pick, sentSummary, stamp, zip } from "../lib.js";
+  isMac, mediaUrl, message, phrases, pick, sentSummary, stamp, zip } from "../lib.js";
 import { STR, tr } from "../strings.js";
 
 // loudness over time: speech where [from, to)
@@ -299,4 +299,13 @@ test("the colour picker: ready colours, hex and hsv both ways, the edge of the o
   }
   assert.deepEqual(rgb2hsv([1, 0, 0]), [0, 1, 1]);
   assert.deepEqual(rgb2hsv([0, 0, 0]), [0, 0, 0]);
+});
+
+test("isMac: by platform, not by browser", () => {
+  assert.equal(isMac({ platform: "MacIntel" }), true);
+  assert.equal(isMac({ userAgentData: { platform: "macOS" }, platform: "x" }), true);
+  assert.equal(isMac({ platform: "Win32" }), false);
+  assert.equal(isMac({ userAgentData: { platform: "Windows" } }), false);
+  assert.equal(isMac({}), false);
+  assert.equal(isMac(null), false);
 });

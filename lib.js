@@ -14,6 +14,8 @@ export const VOICE = {
 // the chat gets `max` best ones as pictures, all of them go in the archive
 export const FRAMES = { max: 12, every: 500, part: 18 * 1024 * 1024 };
 export const MAX_MS = 10 * 60e3;
+// macOS (any browser): no floating pen window, the island stays on the page and the whole screen is recorded
+export const isMac = (nav = globalThis.navigator) => /^mac/i.test(nav?.userAgentData?.platform || nav?.platform || "");
 export const WARN_MS = 60e3;   // the island warns this long before the limit
 
 // Phrases. step(t, rms) -> what to do now: {cut: a phrase or null, restart, frame: "onset" | null}.

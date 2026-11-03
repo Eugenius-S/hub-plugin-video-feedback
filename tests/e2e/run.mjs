@@ -1364,6 +1364,35 @@ async function narrowPip() {
 // 16b. A browser that shows the island's window without the plugin's window rules (Dia on macOS: a small window, the copied
 // stylesheet has no effect there) and resizes it without a resize event: the island still fits, sits in the middle and the
 // window is painted in the island's colour, not left white
+// on a Mac there is no floating window whatever the browser offers: the pen button is hidden, a recording keeps the island on the page,
+// the screen is asked for as a whole monitor
+async function macNoPip() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light&noproc&plat=mac");
+    await view(b);
+    await b.ev(fakePip(false));
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-root')"), "the island opened on the page", 10000);
+    await sleep(1500);
+    check(await b.ev("window.__pipTries") === 0, "the floating window was not requested on a Mac");
+    check(await b.ev("!window.__pip"), "no floating window");
+    check(await b.ev("document.querySelector('.vfd-root .vfd-btn[data-act=pip], .vfd-root [data-act=pip]')?.hidden === true"), "no float-out button");
+    check(await b.ev("window.__displayOpts?.video?.displaySurface") === "monitor", "the whole screen is asked for");
+  } finally { b.close(); }
+  // the same page as Windows still floats out
+  const w = await launch();
+  try {
+    await load(w, h, "?bg=light&noproc&plat=win");
+    await view(w);
+    await w.ev(fakePip(false));
+    await record(w, 0);
+    await until(() => w.ev(inPip), "the island opened in its own window off a Mac", 10000);
+  } finally { w.close(); h.close(); }
+}
+
 async function diaPip() {
   const h = newHub();
   await h.listen();
@@ -1897,7 +1926,7 @@ async function pipUser() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { limit, pipUser, collapse, collapsePip, realPip, penPreview, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+const cases = { macNoPip, limit, pipUser, collapse, collapsePip, realPip, penPreview, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

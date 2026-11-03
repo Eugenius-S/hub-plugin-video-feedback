@@ -29,11 +29,15 @@ body { background: var(--background); color: var(--foreground); font-family: var
 // hub.lang is undefined (the plugin shows English); a test sets window.__hub.lang to switch the language.
 const Q = new URLSearchParams(location.search);
 const TH = Q.get("theme") || "light";
+// ?plat=mac: a Mac; the default is Windows, so the scenarios about the floating window run on any machine the tests run on
+Object.defineProperty(navigator, "platform", { configurable: true, value: Q.get("plat") === "mac" ? "MacIntel" : "Win32" });
+Object.defineProperty(navigator, "userAgentData", { configurable: true, value: undefined });
 if (Q.has("noproc")) delete globalThis.MediaStreamTrackProcessor;   // ?noproc: a browser that cannot process the screen track (no preview in the pen window, the pen stays on the page)
 document.documentElement.classList.add(TH === "dark" ? "t-dark" : TH.startsWith("clean") ? "t-" + TH : "t-light");
 if (TH.startsWith("clean")) document.documentElement.classList.add("th-clean", ...(TH === "clean-dark" ? ["th-clean-dark"] : []));
 // ?bg=light|dark|split: a still "screen" (white, black, or white on the left and black on the right) - the ink colour test
-navigator.mediaDevices.getDisplayMedia = async () => {
+navigator.mediaDevices.getDisplayMedia = async (opts) => {
+  window.__displayOpts = opts;
   const c = document.createElement("canvas");
   const [SW, SH] = (Q.get("screen") || "640x360").split("x").map(Number);   // ?screen=2560x1440: a screen as big as a real one
   c.width = SW; c.height = SH;
