@@ -1276,7 +1276,7 @@ async function away() {
   await h.listen();
   const b = await launch();
   try {
-    await load(b, h, "?bg=light&noproc");
+    await load(b, h, "?bg=light");
     await view(b);
     await b.ev(fakePip(false));
     await record(b, 0);
@@ -1323,7 +1323,7 @@ async function narrowPip() {
   await h.listen();
   const b = await launch();
   try {
-    await load(b, h, `?bg=light&noproc${process.env.VF_PIP_THEME ? "&theme=" + process.env.VF_PIP_THEME : ""}`);
+    await load(b, h, `?bg=light${process.env.VF_PIP_THEME ? "&theme=" + process.env.VF_PIP_THEME : ""}`);
     await view(b);
     await b.ev(fakePip(false));
     await b.ev("window.__pipFixed = { w: 270, h: 230 }");
@@ -1371,7 +1371,7 @@ async function macNoPip() {
   await h.listen();
   const b = await launch();
   try {
-    await load(b, h, "?bg=light&noproc&plat=mac");
+    await load(b, h, "?bg=light&plat=mac");
     await view(b);
     await b.ev(fakePip(false));
     await record(b, 0);
@@ -1385,7 +1385,7 @@ async function macNoPip() {
   // the same page as Windows still floats out
   const w = await launch();
   try {
-    await load(w, h, "?bg=light&noproc&plat=win");
+    await load(w, h, "?bg=light&plat=win");
     await view(w);
     await w.ev(fakePip(false));
     await record(w, 0);
@@ -1398,7 +1398,7 @@ async function diaPip() {
   await h.listen();
   const b = await launch();
   try {
-    await load(b, h, `?bg=light&noproc${process.env.VF_PIP_THEME ? "&theme=" + process.env.VF_PIP_THEME : ""}`);
+    await load(b, h, `?bg=light${process.env.VF_PIP_THEME ? "&theme=" + process.env.VF_PIP_THEME : ""}`);
     await view(b);
     await b.ev(fakePip(false));
     await b.ev("window.__pipFixed = { w: 175, h: 130 }");
@@ -1720,79 +1720,53 @@ async function realPip() {
   } finally { b.close(); h.close?.(); }
 }
 
-// 16b. the pen in the window: over the live preview of the screen, from any tab; the strokes reach the video and the frames
-async function penPreview() {
+// 16b. the pen with the island in the floating window: the window holds only the panel (no picture of the screen), the tool picked
+// there arms the page and the strokes are drawn on the page
+async function penInPip() {
   const h = newHub();
   await h.listen();
   const b = await launch();
   try {
-    await view(b, 1000, 700);
+    if (!process.env.VF_HEADED) await view(b, 1000, 700);
     await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/?bg=light` });
     await until(() => b.ev("window.__ready === true").catch(() => false), "the harness page");
+    await b.page("Page.bringToFront");
     check(await b.ev("typeof window.documentPictureInPicture?.requestWindow") === "function", "this Chrome has the Document PiP window");
     await b.ev(`(() => { const d = window.documentPictureInPicture, r = d.requestWindow.bind(d); d.requestWindow = async (o) => { const w = await r(o); window.__pip = w; return w; }; return 0; })()`);
     await b.page("Runtime.evaluate", { expression: "window.__root.querySelector('.vf-btn').click()", userGesture: true });
     await until(async () => (await phase(b)) === "rec", "recording is running", 20000);
-    await until(() => b.ev("!!window.__pip?.document.querySelector('.vfd-island') && globalThis.__videoFeedback().island.preview()"), "the window has the preview", 10000);
+    await until(() => b.ev("!!window.__pip?.document.querySelector('.vfd-island')"), "the island is in the window", 10000);
     const pipEv = (js) => b.ev(`(() => { const w = window.__pip; return (${js}); })()`);
-    // the window's target: input goes to it by CDP
-    const targets = (await b.page("Target.getTargets")).targetInfos;
-    const pt = targets.find((x) => x.url === "about:blank" && x.type !== "browser" && x.attached === false) || targets.find((x) => /picture/i.test(x.type));
-    check(!!pt, "the window is a target of its own");
-    const { sessionId } = await b.send("Target.attachToTarget", { targetId: pt.targetId, flatten: true });
-    const mouse = (type, x, y) => b.send("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 }, sessionId);
-    const dragPip = async (a, c) => {
-      await mouse("mouseMoved", ...a); await mouse("mousePressed", ...a);
-      for (let i = 1; i <= 8; i++) await mouse("mouseMoved", a[0] + ((c[0] - a[0]) * i) / 8, a[1] + ((c[1] - a[1]) * i) / 8);
-      await mouse("mouseReleased", ...c);
-    };
-    const box = await pipEv("(() => { const c = w.document.querySelector('canvas'); const r = c.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()");
-    check(box[2] > 150 && box[3] > 80, `the preview has room in the window (${box.map(Math.round)})`);
-    check(await b.ev("!document.querySelector('.vf-draw')?.classList.contains('vf-on')"), "the page itself has no pen on it");
+    check(await pipEv("w.document.querySelectorAll('canvas, video').length") === 0, "the window has no preview of the screen, only the panel");
+    if (!process.env.VF_HEADED) await until(async () => (await pipEv("w.innerHeight")) < 200, "the window is panel-sized, not a picture-sized one", 6000).catch(async (e) => { throw new Error(`${e.message} (${await pipEv("w.innerWidth + 'x' + w.innerHeight")})`); });
+    if (process.env.VF_HEADED) {   // a real window: the first press in it sets it to the panel's size (a window opened by a script gets a size of its own)
+      const pt = (await b.page("Target.getTargets")).targetInfos.find((x) => x.url === "about:blank" && x.type !== "browser" && x.attached === false);
+      const { sessionId } = await b.send("Target.attachToTarget", { targetId: pt.targetId, flatten: true });
+      for (const type of ["mousePressed", "mouseReleased"]) await b.send("Input.dispatchMouseEvent", { type, x: 3, y: 3, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 }, sessionId);
+      await sleep(1000);
+    }
     await pipEv("w.document.querySelector('.vfd-btn[data-tool=pencil]').click()");
     check(await pipEv("w.document.querySelector('.vfd-btn[data-tool=pencil]').getAttribute('aria-pressed')") === "true", "the pencil is taken in the window");
-    // red pixels in the recorded frames
-    const RED = `async (blob) => { const bm = await createImageBitmap(blob); const c = new OffscreenCanvas(bm.width, bm.height), g = c.getContext('2d'); g.drawImage(bm, 0, 0);
-      const d = g.getImageData(0, 0, bm.width, bm.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] < 120 && d[i + 2] < 120) n++; return n; }`;
-    const redFrames = () => b.ev(`(async () => { const red = ${RED}; const fs = globalThis.__videoFeedback().frames; const out = []; for (const f of fs) out.push(await red(f.blob)); return out; })()`);
-    await sleep(1200);
-    check((await redFrames()).every((n) => n === 0), "before a stroke no frame has the ink");
-    const [x, y, w, hh] = box;
-    await dragPip([x + w * 0.2, y + hh * 0.3], [x + w * 0.8, y + hh * 0.6]);
-    check(await b.ev("globalThis.__videoFeedback().island.strokes()") === 1, "a stroke is on the preview");
+    check(await b.ev("document.querySelector('.vf-draw').classList.contains('vf-on')"), "the page takes the pen");
+    // the stroke on the page, by input events of the page
+    const mouse = (type, x, y) => b.page("Input.dispatchMouseEvent", { type, x, y, button: "left", buttons: type === "mouseReleased" ? 0 : 1, clickCount: 1 });
+    await mouse("mouseMoved", 200, 200); await mouse("mousePressed", 200, 200);
+    for (let i = 1; i <= 8; i++) await mouse("mouseMoved", 200 + 40 * i, 200 + 15 * i);
+    await mouse("mouseReleased", 520, 320);
+    check(await b.ev("globalThis.__videoFeedback().island.strokes()") === 1, "a stroke is drawn on the page");
     check((await rec(b)).drew === true, "the recording knows it was drawn on");
-    await until(async () => (await redFrames()).some((n) => n > 40), "the stroke is in a recorded frame", 8000);
-    if (process.env.VF_SHOTS) {   // a snapshot of the window: the panel, the preview, the stroke
-      const png = await b.send("Page.captureScreenshot", { format: "png" }, sessionId);
+    if (process.env.VF_SHOTS) {
+      const png = await b.page("Page.captureScreenshot", { format: "png" });
       fs.mkdirSync(process.env.VF_SHOTS, { recursive: true });
-      fs.writeFileSync(path.join(process.env.VF_SHOTS, "pen-preview-window.png"), Buffer.from(png.data, "base64"));
+      fs.writeFileSync(path.join(process.env.VF_SHOTS, "pen-in-pip-page.png"), Buffer.from(png.data, "base64"));
+      if (process.platform === "win32" && process.env.VF_HEADED) {   // the whole desktop: the page with the stroke and the window over it
+        const f = path.join(process.env.VF_SHOTS, "pen-in-pip-desktop.png").split(path.sep).join("/");
+        execFileSync("powershell", ["-NoProfile", "-Command", `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $s=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $b=New-Object System.Drawing.Bitmap $s.Width,$s.Height; $g=[System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen($s.Location,[System.Drawing.Point]::Empty,$s.Size); $b.Save('${f}')`]);
+      }
     }
-    // the hub tab goes out of sight (another tab in front): the pen keeps working and the picture keeps being put together
-    const other = await b.send("Target.createTarget", { url: "about:blank" });
-    await b.send("Target.activateTarget", { targetId: other.targetId });
-    await until(() => b.ev("document.hidden").catch(() => false), "the hub tab is hidden", 5000);
-    check(await pipEv("!w.document.querySelector('.vfd-root').classList.contains('vfd-paused')"), "from another tab the tools are not dimmed");
-    const before = (await redFrames()).length;
-    await pipEv("w.document.querySelector('.vfd-btn[data-tool=rect]').click()");
-    await dragPip([x + w * 0.3, y + hh * 0.7], [x + w * 0.6, y + hh * 0.9]);
-    check(await b.ev("globalThis.__videoFeedback().island.strokes()") === 2, "a second stroke from the hidden tab");
-    await until(async () => (await redFrames()).slice(before).some((n) => n > 40), "the second stroke is in a frame taken while the tab was hidden", 8000);
-    await b.send("Target.closeTarget", { targetId: other.targetId });
-    await b.send("Target.activateTarget", { targetId: (await b.page("Target.getTargets")).targetInfos.find((t) => t.url.includes(`127.0.0.1:${h.port}`) && t.type === "page").targetId });
-    await sleep(600);
-    // stop from the window, the video must carry the strokes
+    await sleep(5000);
     await pipEv("w.document.querySelector('.vfd-rec').click()");
-    await until(() => h.sends.length, "the message in the chat", 20000);
-    const vids = videos(h);
-    check(vids.length === 1 && isWebm(vids[0].path), "the video is a real webm");
-    const N = 400 * 300 * 3;
-    const raw = execFileSync("ffmpeg", ["-v", "error", "-i", vids[0].path, "-vf", "fps=2,scale=400:300", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { maxBuffer: 1 << 28 });
-    const counts = [];
-    for (let i = 0; i + N <= raw.length; i += N) { let n = 0; for (let j = i; j < i + N; j += 3) if (raw[j] > 200 && raw[j + 1] < 120 && raw[j + 2] < 120) n++; counts.push(n); }
-    console.log("red pixels per video frame:", counts.join(","));
-    check(counts.length >= 3, `the video has frames (${counts.length})`);
-    check(counts[0] === 0, "the first video frame has no ink");
-    check(counts.some((n) => n > 40), "the strokes are in the video");
+    await until(() => h.sends.length, "stop in the window: the message in the chat", 20000);
   } finally { b.close(); h.close(); }
 }
 
@@ -1858,7 +1832,7 @@ async function collapsePip() {
     await b.ev(`${doc}.querySelector('.vfd-collapse').click()`);
     await sleep(500);
     const small = await b.ev("window.__pipGeo().w");
-    check(small < full, `the window follows the strip, to the width the preview needs (${full} -> ${small})`);
+    check(small < full * 0.7, `the window follows the strip (${full} -> ${small})`);
     check(await b.ev(`getComputedStyle(${doc}.querySelector('.vfd-min')).display`) === "none", "folded: back-to-page is not shown");
     await b.ev(`${doc}.querySelector('.vfd-collapse').click()`);
     await sleep(500);
@@ -1892,7 +1866,7 @@ async function pipUser() {
   await h.listen();
   const b = await launch();
   try {
-    await load(b, h, "?bg=light&noproc");
+    await load(b, h, "?bg=light");
     await view(b);
     await b.ev(fakePip(false));
     await record(b, 0);
@@ -1926,7 +1900,7 @@ async function pipUser() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { macNoPip, limit, pipUser, collapse, collapsePip, realPip, penPreview, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+const cases = { macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

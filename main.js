@@ -10,7 +10,6 @@
 // UI texts and the message to the session: en by default, ru when the hub language is Russian (strings.js, picked by
 // hub.lang at use time).
 import { FRAMES, MAX_MS, VOICE, WARN_MS, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, zip } from "./lib.js";
-import { composer } from "./compose.js";
 import { createIsland, icon } from "./island.js";
 import { tr } from "./strings.js";
 
@@ -277,22 +276,17 @@ function record() {
   r.frames = [];        // frames: {t, kind, phrase, blob, n}
   r.waiting = [];       // phrases waiting for transcription
   r.running = 0;
+  r.grab = grabber(r.screen.getVideoTracks()[0], hubRef.url("frame.js"));
   r.ticks = 0;
   r.title = document.title;
   r.tags = [];          // animation tags: {slug, title, t, gone?}
   r.drew = false;
-  // the strokes drawn in the pen window are put on the recorded picture by the composer (null where the browser cannot: then there
-  // is no preview and the pen stays on the page)
-  const track = r.screen.getVideoTracks()[0];
-  r.comp = composer(track, hubRef.url("tick.js"), { active: () => r.island.ink.active(), paint: (...a) => r.island.ink.paint(...a) });
   r.island = createIsland({
     el: hubRef.el, t,
     timecode: () => stamp(performance.now() - r.t0), gallery,
     onTag: (item) => tag(r, item), onUntag: (i) => untag(r, i), onStroke: () => { r.drew = true; saveMeta(r); },
     onToggle: () => paintAll(), onStop: () => stop(), onDiscard: () => discard(),
-    preview: r.comp ? track : null,   // the pen window shows the screen live and the pen draws on that
   });
-  r.grab = grabber(track, hubRef.url("frame.js"), r.comp);
   r.island.open();
   // the island goes into its own small window at once, for any recording; if the browser wants a click first,
   // the first press on the island or on a plugin button floats it out
@@ -310,7 +304,7 @@ function record() {
     r.whole = piece(r.mic, (b) => put(r, `${r.id}/w/${pad(r.wholeN++)}`, b), 5000);
   }
   // the screen video goes only to IndexedDB, not memory: it reaches the hub even if the recording is cut off
-  try { r.video = piece(r.comp?.stream || r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
+  try { r.video = piece(r.screen, (b) => put(r, `${r.id}/v/${pad(r.videoN++)}`, b), 5000, VIDEO); }
   catch { r.video = null; }   // the browser cannot record video - frames and audio are saved anyway
   saveMeta(r);
   // the timer lives in a separate thread: the hub tab is usually out of sight during a recording and the browser throttles its timers
@@ -434,7 +428,7 @@ async function shoot(r, t, kind, extra) {
 
 // a screen shot: JPEG with the long side up to EDGE. The page only takes the frame (ImageCapture, or a bitmap of the video);
 // scaling and encoding go to a worker, so the pen and the island on the page keep their frame rate. No worker: the same on the page.
-function grabber(track, workerUrl, comp) {
+function grabber(track, workerUrl) {
   const cap = "ImageCapture" in window ? new ImageCapture(track) : null;
   let video = null, worker = null, n = 0;
   const wait = new Map();
@@ -447,9 +441,8 @@ function grabber(track, workerUrl, comp) {
     }
   } catch { worker = null; }
   const grab = async () => {
-    let src = comp ? await comp.bitmap() : null;   // the picture with the strokes on it
-    if (src) { /* taken */ }
-    else if (cap) src = await cap.grabFrame();
+    let src;
+    if (cap) src = await cap.grabFrame();
     else {
       if (!video) { video = document.createElement("video"); video.muted = true; video.srcObject = new MediaStream([track]); await video.play(); }
       src = await createImageBitmap(video);
@@ -729,7 +722,6 @@ function release(r) {
   r.island?.destroy();
   r.unconfine?.();
   r.grab?.close();
-  r.comp?.close();
   for (const s of [r.screen, r.mic]) s?.getTracks().forEach((t) => t.stop());
   r.audio?.close();
 }

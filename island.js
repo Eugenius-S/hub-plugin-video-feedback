@@ -1,5 +1,5 @@
 // The pen island: a small floating panel over the hub page while the screen is recorded. Pencil, rectangle, oval and line draw on
-// a transparent canvas over the page (or over the preview in the floating window), so the strokes land in the recorded video and in the frames; the island is a
+// a transparent canvas over the page, so the strokes land in the recorded video and in the frames by themselves; the island is a
 // child of <html>, outside <body>, so the capture of the hub tab can leave it out (Element Capture, see confine() in main.js).
 // One ink colour serves every tool: a round button next to the grip opens the colour popover (8 ready colours, a square, a hue
 // strip, hex), the choice is remembered (localStorage) and applies to the next stroke on the open canvas. A stroke is drawn in
@@ -8,10 +8,7 @@
 // image cannot hold children, so a video or image shown full screen is swapped for our own fullscreen box with a copy of it (the
 // viewer); the players' native fullscreen button is replaced, in the same place and the same look, for the time of the recording (see fsOn). An iframe, an embed or a
 // canvas cannot be copied: there the island floats out into a Picture-in-Picture window (the pip button, or by pulling it past the
-// edge of the window); only the island goes there. While the screen is recorded, the window carries a live preview of the screen
-// (a <video> of the recorded track) and the pen draws over that preview, from any tab: the strokes are put on the recorded picture by
-// compose.js (ink.paint), the page itself stays free of them. Without a preview (a browser with no track processor) the pen draws on
-// the page, and is dimmed while the hub tab is out of sight.
+// edge of the window); only the island goes there, the drawing stays on the page.
 // A Motion Gallery button (only when that plugin answers) opens a popover with posters; a pick tags the animation at the
 // current moment of the video. The look follows the designer's mock-up (vfd-* classes in style.css, tokens of the hub theme).
 import { COLORS, DRAW, INK_KEY, count, fadeAlpha, fmtDuration, hex2rgb, hsv2rgb, inkColor, isMac, matchItem, mediaUrl, rgb2hex, rgb2hsv } from "./lib.js";
@@ -22,7 +19,6 @@ const COLLAPSED = "hub-video-feedback:island-collapsed";   // the island is fold
 const PIP_MIN = { w: 80, h: 40 };   // a window smaller than this is no use: some browsers open the window with no size at all
 const EDGE = 8;        // the popover and the toast keep this far from the screen edge, and sit this far under the island
 const PIP_PAD = 0;     // the island's margin inside the Picture-in-Picture window: none, the window is the island
-const PIP_VIEW = { w: 420, min: 120, max: 300, floor: 80, k: 1.5 };   // the window with a preview: its width at opening, the preview's height at opening (least, most), the least left when the person made the window small, how far the panel grows with the window
 const SHOWN = 60;      // cards drawn at once in the popover
 const TOOLS = ["pencil", "rect", "oval", "line"];
 // outline icons from the designer's mock-up (Icons8 and Material outlined; move is Material drag_indicator, six dots), viewBox 0 0 24 24, currentColor
@@ -210,53 +206,23 @@ export function createIsland(o) {
   bar.addEventListener("focusout", tipOff);
   bar.addEventListener("click", (e) => { if (e.detail) tipOff(); });
 
-  // Two surfaces to draw on. The page: a canvas over the whole hub page (the strokes land in a recording of this tab by themselves).
-  // The preview in the pen window (`stage`): a canvas over the live picture of the screen; the strokes live in the pixels of that
-  // canvas and are put on the recorded picture by compose.js (ink.paint), so they land from any tab.
   const canvas = o.el("canvas", "vf-draw");
   canvas.setAttribute("aria-hidden", "true");
-  let cv = canvas, g = canvas.getContext("2d");
-  let ovl = false, stage = null;       // the pen is on the preview in the window; its parts (see buildStage)
-  let surf = { w: 0, h: 0 }, lw = DRAW.width, org = { x: 0, y: 0 };   // size of the surface in CSS px, line width on it, where its corner is in the window
-  let frameWin = window, wakeWin = window;   // the window a pending frame / timer belongs to: the hub tab's timers sleep when it is out of sight, the pen window's do not
+  const g = canvas.getContext("2d");
 
   function fit() {
-    const dpr = (ovl ? win.devicePixelRatio : devicePixelRatio) || 1;
-    let w = innerWidth, h = innerHeight;
-    if (ovl) {
-      w = stage.box.clientWidth; h = stage.box.clientHeight;
-      if (!w || !h) return;
-      // the preview was resized: the strokes follow it
-      if (surf.w && strokes.length && (w !== surf.w || h !== surf.h)) rescale(w / surf.w, h / surf.h);
-      const r = stage.box.getBoundingClientRect();
-      org = { x: r.left, y: r.top };
-    } else org = { x: 0, y: 0 };
-    surf = { w, h };
-    lw = ovl ? Math.max(2, DRAW.width * w / 1440) : DRAW.width;   // on the small preview the line is proportional, and still visible
-    pad = lw / 2 + 2;
-    cv.width = Math.round(w * dpr);
-    cv.height = Math.round(h * dpr);
+    const dpr = devicePixelRatio || 1;
+    canvas.width = Math.round(innerWidth * dpr);
+    canvas.height = Math.round(innerHeight * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    dirty = { x1: 0, y1: 0, x2: w, y2: h };
-    unframe();
+    dirty = { x1: 0, y1: 0, x2: innerWidth, y2: innerHeight };
+    cancelAnimationFrame(frameId);
     frame();
-  }
-  function rescale(fx, fy) {
-    const pt = (p) => ({ x: p.x * fx, y: p.y * fy });
-    for (const s of strokes) {
-      const same = s.a === s.b;
-      s.a = pt(s.a);
-      s.b = same ? s.a : pt(s.b);
-      s.segs = s.segs.map((q) => ({ x1: q.x1 * fx, y1: q.y1 * fy, x2: q.x2 * fx, y2: q.y2 * fy }));
-      s.box = { x1: s.box.x1 * fx, y1: s.box.y1 * fy, x2: s.box.x2 * fx, y2: s.box.y2 * fy };
-      s.pend = null;
-    }
   }
 
   // the pen draws on the hub page: while that tab is not on screen (the island floats over another tab) the strokes cannot land there.
-  // The tools dim and say so in a native tip (the island's own tips are off in the small window); they come back with the tab.
-  // On the preview in the pen window the pen works from any tab: nothing to wait for
-  const paused = () => !!pipWin && !ovl && document.hidden;
+  // The tools dim and say so in a native tip (the island's own tips are off in the small window); they come back with the tab
+  const paused = () => !!pipWin && document.hidden;
   const syncPaused = () => {
     const off = paused();
     root.classList.toggle("vfd-paused", off);
@@ -269,123 +235,91 @@ export function createIsland(o) {
   function pick(id) {
     tool = id;
     for (const b of tools) b.setAttribute("aria-pressed", String(b.dataset.tool === id));
-    armCanvas();
-    if (id) { closePop(); closeColor(); if (pipWin && !ovl) { try { window.focus(); } catch { /* not allowed */ } } }   // the pen is in the window, the drawing on the page: the first stroke must not be eaten by focusing it
-  }
-  // the canvas in use takes the pen; with no tool (or the other surface) the page under the canvas is clickable again
-  function armCanvas() {
-    canvas.classList.toggle("vf-on", !!tool && !ovl);
-    const c = stage?.ink;
-    if (!c) return;
-    const on = !!tool && ovl;
-    c.style.pointerEvents = on ? "auto" : "none";
-    c.style.cursor = on ? "crosshair" : "";
-    c.style.touchAction = on ? "none" : "";
+    canvas.classList.toggle("vf-on", !!id);   // no tool: the page under the canvas is clickable again
+    if (id) { closePop(); closeColor(); if (pipWin) { try { window.focus(); } catch { /* not allowed */ } } }   // the pen is in the window, the drawing on the page: the first stroke must not be eaten by focusing it
   }
 
   // Drawing stays off the pointer handlers: they only record points (no layout reads, no painting); one animation frame paints
   // what changed, and only inside the rectangle that changed (`dirty`); the strokes touching it are painted again whole. The pencil
   // stroke being drawn is the exception: its new segments are only added on top (`drawn` counts those already on the canvas).
-  let pad = DRAW.width / 2 + 2;
+  const pad = DRAW.width / 2 + 2;
   const bounds = (s) => s.tool === "pencil" ? s.box
     : { x1: Math.min(s.a.x, s.b.x), y1: Math.min(s.a.y, s.b.y), x2: Math.max(s.a.x, s.b.x), y2: Math.max(s.a.y, s.b.y) };
   const mark = (r) => {
     dirty = dirty ? { x1: Math.min(dirty.x1, r.x1 - pad), y1: Math.min(dirty.y1, r.y1 - pad), x2: Math.max(dirty.x2, r.x2 + pad), y2: Math.max(dirty.y2, r.y2 + pad) }
       : { x1: r.x1 - pad, y1: r.y1 - pad, x2: r.x2 + pad, y2: r.y2 + pad };
   };
-  const schedule = () => { if (!frameId) { frameWin = win; frameId = win.requestAnimationFrame(frame); } };
-  const unframe = () => { try { frameWin.cancelAnimationFrame(frameId); } catch { /* window gone */ } frameId = 0; };
-  const later = (f, ms) => { wakeWin = win; wake = win.setTimeout(f, ms); };
-  const unlater = () => { try { wakeWin.clearTimeout(wake); } catch { /* window gone */ } };
-  const at = (e) => ({ x: e.clientX - org.x, y: e.clientY - org.y });
+  const schedule = () => { if (!frameId) frameId = requestAnimationFrame(frame); };
 
   // the right button puts the tool down (the page under the canvas is clickable again); with no tool the usual menu opens
-  function bind(c) {
-    c.addEventListener("contextmenu", (e) => {
-      if (!tool) return;
-      e.preventDefault();
-      pick(null);
-    });
-    c.addEventListener("pointerdown", (e) => {
-      if (!tool || e.button) return;
-      e.preventDefault();
-      c.setPointerCapture(e.pointerId);
-      if (ovl) { const r = c.getBoundingClientRect(); org = { x: r.left, y: r.top }; }
-      const p = at(e);
-      cur = { tool, color: ink, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, done: 0, drawn: 0 };
-      mark(bounds(cur));
-      strokes.push(cur);
-      schedule();
-    });
-    c.addEventListener("pointermove", (e) => {
-      if (!cur) return;
-      const s = cur;
-      if (s.tool !== "pencil") mark(bounds(s));   // the old place of the shape is wiped, the new one painted
-      const points = e.getCoalescedEvents?.() ?? [];
-      for (const m of points.length ? points : [e]) {
-        const p = at(m);
-        if (s.tool === "pencil") {
-          // the area of the new segment (with the previous point) waits in `pend`: the frame adds the segment, or paints the stroke whole
-          const r = { x1: Math.min(s.b.x, p.x), y1: Math.min(s.b.y, p.y), x2: Math.max(s.b.x, p.x), y2: Math.max(s.b.y, p.y) };
-          s.pend = s.pend ? { x1: Math.min(s.pend.x1, r.x1), y1: Math.min(s.pend.y1, r.y1), x2: Math.max(s.pend.x2, r.x2), y2: Math.max(s.pend.y2, r.y2) } : r;
-          s.segs.push({ x1: s.b.x, y1: s.b.y, x2: p.x, y2: p.y });
-          s.box = { x1: Math.min(s.box.x1, p.x), y1: Math.min(s.box.y1, p.y), x2: Math.max(s.box.x2, p.x), y2: Math.max(s.box.y2, p.y) };
-        }
-        s.b = p;
+  canvas.addEventListener("contextmenu", (e) => {
+    if (!tool) return;
+    e.preventDefault();
+    pick(null);
+  });
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!tool || e.button) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    const p = { x: e.clientX, y: e.clientY };
+    cur = { tool, color: ink, a: p, b: p, segs: [{ x1: p.x, y1: p.y, x2: p.x, y2: p.y }], box: { x1: p.x, y1: p.y, x2: p.x, y2: p.y }, done: 0, drawn: 0 };
+    mark(bounds(cur));
+    strokes.push(cur);
+    schedule();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!cur) return;
+    const s = cur;
+    if (s.tool !== "pencil") mark(bounds(s));   // the old place of the shape is wiped, the new one painted
+    const points = e.getCoalescedEvents?.() ?? [];
+    for (const m of points.length ? points : [e]) {
+      const p = { x: m.clientX, y: m.clientY };
+      if (s.tool === "pencil") {
+        // the area of the new segment (with the previous point) waits in `pend`: the frame adds the segment, or paints the stroke whole
+        const r = { x1: Math.min(s.b.x, p.x), y1: Math.min(s.b.y, p.y), x2: Math.max(s.b.x, p.x), y2: Math.max(s.b.y, p.y) };
+        s.pend = s.pend ? { x1: Math.min(s.pend.x1, r.x1), y1: Math.min(s.pend.y1, r.y1), x2: Math.max(s.pend.x2, r.x2), y2: Math.max(s.pend.y2, r.y2) } : r;
+        s.segs.push({ x1: s.b.x, y1: s.b.y, x2: p.x, y2: p.y });
+        s.box = { x1: Math.min(s.box.x1, p.x), y1: Math.min(s.box.y1, p.y), x2: Math.max(s.box.x2, p.x), y2: Math.max(s.box.y2, p.y) };
       }
-      if (s.tool !== "pencil") mark(bounds(s));
-      schedule();
-    });
-    const up = () => {
-      if (!cur) return;
-      cur.done = performance.now();
-      cur = null;
-      o.onStroke?.();
-      schedule();
-    };
-    c.addEventListener("pointerup", up);
-    c.addEventListener("pointercancel", up);
-  }
-  bind(canvas);
+      s.b = p;
+    }
+    if (s.tool !== "pencil") mark(bounds(s));
+    schedule();
+  });
+  const up = () => {
+    if (!cur) return;
+    cur.done = performance.now();
+    cur = null;
+    o.onStroke?.();
+    schedule();
+  };
+  canvas.addEventListener("pointerup", up);
+  canvas.addEventListener("pointercancel", up);
 
   // the stroke is one path in the picked colour as it is, with no edge or shadow: one path for the whole pencil stroke, because
   // separate round-capped segments overlap and show as beads while the stroke fades
-  function trace(c, s, alpha) {
-    c.globalAlpha = alpha;
-    c.lineCap = c.lineJoin = "round";
-    c.lineWidth = lw;
-    c.strokeStyle = s.color;
-    c.beginPath();
-    if (s.tool === "pencil") {
-      c.moveTo(s.segs[0].x1, s.segs[0].y1);
-      for (const q of s.segs) c.lineTo(q.x2, q.y2);
-    } else if (s.tool === "line") { c.moveTo(s.a.x, s.a.y); c.lineTo(s.b.x, s.b.y); }
-    else if (s.tool === "rect") c.rect(Math.min(s.a.x, s.b.x), Math.min(s.a.y, s.b.y), Math.abs(s.b.x - s.a.x), Math.abs(s.b.y - s.a.y));
-    else c.ellipse((s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2, Math.abs(s.b.x - s.a.x) / 2, Math.abs(s.b.y - s.a.y) / 2, 0, 0, 2 * Math.PI);
-    c.stroke();
-  }
   function paint(s, alpha) {
-    trace(g, s, alpha);
-    if (s.tool === "pencil") { s.drawn = s.segs.length; s.pend = null; }
+    g.globalAlpha = alpha;
+    g.lineCap = g.lineJoin = "round";
+    g.lineWidth = DRAW.width;
+    g.strokeStyle = s.color;
+    g.beginPath();
+    if (s.tool === "pencil") {
+      g.moveTo(s.segs[0].x1, s.segs[0].y1);
+      for (const q of s.segs) g.lineTo(q.x2, q.y2);
+      s.drawn = s.segs.length;
+      s.pend = null;
+    } else if (s.tool === "line") { g.moveTo(s.a.x, s.a.y); g.lineTo(s.b.x, s.b.y); }
+    else if (s.tool === "rect") g.rect(Math.min(s.a.x, s.b.x), Math.min(s.a.y, s.b.y), Math.abs(s.b.x - s.a.x), Math.abs(s.b.y - s.a.y));
+    else g.ellipse((s.a.x + s.b.x) / 2, (s.a.y + s.b.y) / 2, Math.abs(s.b.x - s.a.x) / 2, Math.abs(s.b.y - s.a.y) / 2, 0, 0, 2 * Math.PI);
+    g.stroke();
   }
-  // the recorded picture: the strokes of the preview painted onto a canvas of another size (compose.js asks for this several times a second)
-  const live = (s, now) => !s.done || !hold || now - s.done < hold + DRAW.fade;
-  const inkOut = {
-    active: () => ovl && strokes.some((s) => live(s, performance.now())),
-    paint(c, w, h, now) {
-      if (!ovl || !surf.w) return;
-      c.save();
-      c.scale(w / surf.w, h / surf.h);
-      for (const s of strokes) if (live(s, now)) trace(c, s, s.done ? fadeAlpha(now - s.done, hold) : 1);
-      c.restore();
-    },
-  };
 
   // the new segments of a pencil stroke on top of what is already there (a stroke that has not started to fade is opaque)
   function extend(s) {
     g.globalAlpha = 1;
     g.lineCap = g.lineJoin = "round";
-    g.lineWidth = lw;
+    g.lineWidth = DRAW.width;
     g.strokeStyle = s.color;
     g.beginPath();
     const from = Math.max(0, s.drawn - 1);
@@ -400,7 +334,7 @@ export function createIsland(o) {
   // a timer wakes the frame when the first one starts to fade, and the frames run only during the fade itself.
   function frame() {
     frameId = 0;
-    unlater();
+    clearTimeout(wake);
     const now = performance.now();
     let fading = false, next = Infinity;
     strokes = strokes.filter((s) => {
@@ -429,7 +363,7 @@ export function createIsland(o) {
       g.restore();
     }
     if (fading) schedule();
-    else if (next < Infinity) later(schedule, next + 1);
+    else if (next < Infinity) wake = setTimeout(schedule, next + 1);
   }
 
   // dragging the island by the grip, anywhere on the page; the place is remembered. The island moves by transform (the compositor,
@@ -440,8 +374,7 @@ export function createIsland(o) {
   let userSized = false, fitAt = 0;   // the person pulled the window's edge: it is not set back to the panel's size on every press
   let win = window, pipBroken = false, pipWin = null, pipAuto = false, pipRO = null, pipTick = 0, pipBg = "";
   const vw = () => win.innerWidth, vh = () => win.innerHeight;
-  // scale does not change layout sizes: they are multiplied. In the window the sizes are the panel's own (its scale there follows the window, see pipLayout)
-  const measure = () => { const m = pipWin ? 1 : k; size.w = root.offsetWidth * m; size.h = root.offsetHeight * m; };
+  const measure = () => { size.w = root.offsetWidth * k; size.h = root.offsetHeight * k; };   // scale does not change layout sizes: they are multiplied
   const keepIn = (x, y) => ({ x: Math.min(Math.max(4, x), Math.max(4, vw() - size.w - 4)),
     y: Math.min(Math.max(4, y), Math.max(4, vh() - size.h - 4)) });
   const put = () => { if (pipWin) return pipScale(); root.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)${k === 1 ? "" : ` scale(${k})`}`; };   // the scale goes after the move: the move is not scaled
@@ -505,11 +438,9 @@ export function createIsland(o) {
     if (fresh || el.vfW === undefined) measureLayer(el);
     const w = el.vfW, h = el.vfH;
     const up = !pipWin && vh() - (pos.y + size.h) - EDGE < h + EDGE && pos.y > vh() - (pos.y + size.h);
-    // in the window the layer scales with the panel and the panel is centred in the window: the sums go in the panel's own units
-    const kk = pipWin ? k : 1, vwl = vw() / kk, off = pipWin ? Math.max(0, (vwl - size.w) / 2) : 0;
     // vfStart (the colour popover): flush with the island's left edge, not centred
     const want = el.vfStart ? pos.x : pos.x + size.w / 2 - w / 2;
-    const left = Math.min(Math.max(EDGE - off, want), Math.max(EDGE - off, vwl - off - w - EDGE));
+    const left = Math.min(Math.max(EDGE, want), Math.max(EDGE, vw() - w - EDGE));
     const shift = `${left - pos.x}px 0`;
     if (el.vfShift !== shift) { el.vfShift = shift; el.style.translate = shift; }
     if (el.vfUp !== up) {
@@ -797,7 +728,7 @@ export function createIsland(o) {
   // In full screen the island grows with the screen: the page sizes are drawn for a 900px high window, so k = height / 900 within
   // 1..1.5 (scale, not zoom: the place is already a transform). In its own window it keeps its size.
   const fsK = () => document.fullscreenElement && !pipWin ? Math.min(1.5, Math.max(1, window.innerHeight / 900)) : 1;
-  const scale = () => { if (!pipWin) k = fsK(); if (root.style.transform) put(); };
+  const scale = () => { k = fsK(); if (root.style.transform) put(); };
   function mount() {
     const fe = document.fullscreenElement;
     const inside = fe && fe !== document.documentElement && !NO_CHILDREN.test(fe.localName) && fe.isConnected ? fe : null;
@@ -1014,13 +945,9 @@ export function createIsland(o) {
     k = k0;
     float.hidden = fh;
     root.classList.remove("vfd-pip", "vfd-layer");
-    // with the screen's live picture (a recording runs) the window holds the panel on top and the preview under it
-    const shot = o.preview?.readyState === "live" ? o.preview : null;
-    let ww = Math.ceil(size.w) + 2 * PIP_PAD, wh = Math.ceil(size.h) + 2 * PIP_PAD;
-    if (shot) { ww = Math.max(ww, PIP_VIEW.w); wh += previewH(ww); }
     let w;
     try {
-      w = await documentPictureInPicture.requestWindow({ width: ww, height: wh });
+      w = await documentPictureInPicture.requestWindow({ width: Math.ceil(size.w) + 2 * PIP_PAD, height: Math.ceil(size.h) + 2 * PIP_PAD });
     } catch { return false; }
     if (!opened || pipWin) { w.close(); return false; }
     copyStyles(w.document);
@@ -1029,7 +956,6 @@ export function createIsland(o) {
     pipBg = getComputedStyle(root).getPropertyValue("--vfd-surface").trim();   // the theme surface, read while the page styles still apply
     root.classList.add("vfd-pip");
     root.style.transform = "";
-    if (shot) buildStage(w, shot);
     w.document.body.append(root);
     float.hidden = true;   // the way back is not offered: the window is only closed
     w.addEventListener("keydown", keys);
@@ -1073,13 +999,11 @@ export function createIsland(o) {
     try { w.document.removeEventListener("pointerdown", pipPress, true); } catch { /* gone */ }
     if (pipRO) { pipRO.disconnect(); pipRO = null; }
     if (pipTick) { clearInterval(pipTick); pipTick = 0; }
-    dropStage();
     for (const p of PIP_PROPS) root.style.removeProperty(p);
     fold.style.removeProperty("display");
     closePop(); closeColor(); dismissToast(); tipOff();
     root.classList.remove("vfd-pip", "vfd-layer");
     root.style.transform = "";
-    k = fsK();
     syncPaused();
     float.hidden = !canPip();
     o.onFloat?.(false);
@@ -1097,7 +1021,6 @@ export function createIsland(o) {
   function pipScale() {
     const w = pipWin;
     if (!w) return;
-    if (stage) return pipLayout();
     measure();
     const layer = pop || cpop || toast;
     root.classList.toggle("vfd-layer", !!layer);   // a popover under the island: the island sits at the top, the popover below it
@@ -1121,10 +1044,10 @@ export function createIsland(o) {
     set("transform", `translate(${fitW ? "-50%" : "0"}, ${midY ? "-50%" : "0"})`);
     fold.style.setProperty("display", collapsed ? "none" : "inline-flex", "important");   // "back to the page" lives only in the window: shown inline for the same reason
   }
-  const PIP_PROPS = ["position", "left", "right", "bottom", "top", "margin", "transform-origin", "transform", "z-index"];
-  function pipDoc(w, dark) {
+  const PIP_PROPS = ["position", "left", "right", "bottom", "top", "margin", "transform-origin", "transform"];
+  function pipDoc(w) {
     const d = w.document;
-    const bg = dark || (w.getComputedStyle(root).getPropertyValue("--vfd-surface") || "").trim() || pipBg || "#111";
+    const bg = (w.getComputedStyle(root).getPropertyValue("--vfd-surface") || "").trim() || pipBg || "#111";
     for (const el of [d.documentElement, d.body]) {
       if (!el) continue;
       const s = el.style;
@@ -1135,100 +1058,6 @@ export function createIsland(o) {
       s.setProperty("overflow", "hidden", "important");
       s.setProperty("background", bg, "important");
     }
-  }
-
-  // ───── the preview: the screen's live picture in the pen window, and the pen over it ─────
-  // the window: a strip with the panel on top (scaled to the window's width), under it the picture of the screen as large as the room
-  // allows (its own proportions, black bars are the dark ground), the pen's canvas exactly over the picture. All styles are inline: some
-  // browsers (Dia) do not apply the copied sheets to the window. The strokes are drawn in the pixels of that canvas and go on the
-  // recorded picture through `ink` (compose.js); the page is not drawn on.
-  const DARK = "#0b0b0c";
-  const aspect = () => { const s = o.preview?.getSettings?.() || {}; return s.width && s.height ? s.height / s.width : 9 / 16; };
-  const previewH = (width) => Math.min(PIP_VIEW.max, Math.max(PIP_VIEW.min, Math.round(width * aspect())));
-  function buildStage(w, track) {
-    const d = w.document;
-    const el = (tag, css) => { const e = d.createElement(tag); Object.assign(e.style, css); return e; };
-    const fill = { position: "absolute", left: "0", top: "0", width: "100%", height: "100%" };
-    const strip = el("div", { position: "fixed", left: "0", right: "0", top: "0", height: "0", background: pipBg || "#111" });
-    const view = el("div", { position: "fixed", left: "0", right: "0", bottom: "0", top: "0", overflow: "hidden", background: DARK });
-    const box = el("div", { position: "absolute", left: "0", top: "0", width: "0", height: "0" });
-    const video = el("video", { ...fill, objectFit: "fill", pointerEvents: "none", background: "#000" });
-    video.muted = true; video.autoplay = true; video.playsInline = true;
-    video.srcObject = new MediaStream([track]);
-    video.play().catch(() => { /* it starts by itself when the first frame comes */ });
-    const inkCv = el("canvas", fill);
-    inkCv.setAttribute("aria-hidden", "true");
-    box.append(video, inkCv);
-    view.append(box);
-    d.body.append(strip, view);
-    stage = { strip, view, box, video, ink: inkCv, ro: null };
-    // the pen moves to the preview: what was drawn on the page is gone (it was on another surface), the page canvas is given back to the page
-    strokes = []; cur = null; dirty = null;
-    unframe(); unlater();
-    g.clearRect(0, 0, canvas.width, canvas.height);
-    ovl = true; cv = inkCv; g = inkCv.getContext("2d");
-    bind(inkCv);
-    armCanvas();
-    surf = { w: 0, h: 0 };
-    const again = () => { if (stage?.box === box) layoutBox(); };
-    video.addEventListener("loadedmetadata", again);
-    video.addEventListener("resize", again);
-    try { stage.ro = new w.ResizeObserver(again); stage.ro.observe(view); } catch { /* the resize event and the fit are enough */ }
-  }
-  function dropStage() {
-    const s = stage;
-    if (!s) return;
-    stage = null;
-    s.ro?.disconnect();
-    s.video.srcObject = null;
-    s.strip.remove();
-    s.view.remove();
-    ovl = false; strokes = []; cur = null; dirty = null;
-    unframe(); unlater();
-    cv = canvas; g = canvas.getContext("2d");
-    surf = { w: 0, h: 0 };
-    armCanvas();
-  }
-  // the picture's box: the biggest of the picture's proportions that fits the room
-  function layoutBox() {
-    const { view, box, video } = stage;
-    const vwid = view.clientWidth, vhei = view.clientHeight;
-    if (!vwid || !vhei) return;
-    const ar = video.videoWidth && video.videoHeight ? video.videoHeight / video.videoWidth : aspect();
-    let bw = vwid, bh = bw * ar;
-    if (bh > vhei) { bh = vhei; bw = bh / ar; }
-    bw = Math.max(1, Math.floor(bw)); bh = Math.max(1, Math.floor(bh));
-    const left = Math.floor((vwid - bw) / 2), top = Math.floor((vhei - bh) / 2);
-    const changed = box.clientWidth !== bw || box.clientHeight !== bh;
-    Object.assign(box.style, { left: left + "px", top: top + "px", width: bw + "px", height: bh + "px" });
-    if (changed) fit();
-    else { const r = box.getBoundingClientRect(); org = { x: r.left, y: r.top }; }
-  }
-  // the window with a preview: the panel keeps its look and grows with the window up to PIP_VIEW.k, the rest is the preview
-  function pipLayout() {
-    const w = pipWin, de = w.document.documentElement;
-    const iw = de.clientWidth || w.innerWidth;
-    const rw = root.offsetWidth || 1, rh = root.offsetHeight;
-    k = Math.min(PIP_VIEW.k, Math.max(1, iw / rw));
-    measure();
-    const layer = pop || cpop || toast;
-    root.classList.toggle("vfd-layer", !!layer);
-    pipDoc(w, DARK);
-    const set = (p, v) => root.style.setProperty(p, v, "important");
-    const centred = iw >= rw * k;   // a window narrower than the panel: pressed to the left edge, cut off on the right, until it grows
-    set("position", "fixed");
-    set("left", centred ? "50%" : "0px");
-    set("right", "auto");
-    set("bottom", "auto");
-    set("top", "0px");
-    set("margin", "0");
-    set("z-index", "2147483000");
-    set("transform-origin", `${centred ? "50%" : "0"} 0`);
-    set("transform", `translate(${centred ? "-50%" : "0"}, 0) scale(${k})`);
-    fold.style.setProperty("display", collapsed ? "none" : "inline-flex", "important");
-    const ph = Math.round(rh * k) + "px";
-    if (stage.strip.style.height !== ph) { stage.strip.style.height = ph; stage.view.style.top = ph; }
-    layoutBox();
   }
   function pipResized() {
     if (!pipTick && performance.now() - fitAt > 500) userSized = true;   // not ours and not the browser settling the new window: the person dragged an edge
@@ -1249,18 +1078,10 @@ export function createIsland(o) {
     measure();
     const layer = pop || cpop || toast;
     const lw = layer ? layer.offsetWidth : 0, lh = layer ? layer.offsetHeight + EDGE : 0;
-    const cw = w.outerWidth - w.innerWidth, ch = w.outerHeight - w.innerHeight;
-    let nw = Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + cw;
-    let nh = Math.ceil(size.h + lh) + 2 * PIP_PAD + ch;
-    const ow = w.outerWidth, oh = w.outerHeight, x = w.screenX, y = w.screenY;
-    if (stage) {
-      // the panel on top, the preview under it; a popover lies over the preview, the window is only as tall as the popover needs
-      const tw = Math.max(size.w, lw, PIP_VIEW.w), kt = Math.min(PIP_VIEW.k, tw / size.w);
-      nw = Math.ceil(Math.max(size.w, lw)) + cw;
-      nh = Math.ceil((size.h + lh) * kt) + PIP_VIEW.floor + ch;
-      if (!userSized) { nw = Math.ceil(tw) + cw; nh = Math.ceil(size.h * kt + Math.max(lh * kt, previewH(tw))) + ch; }
-    }
+    let nw = Math.ceil(Math.max(size.w, lw)) + 2 * PIP_PAD + (w.outerWidth - w.innerWidth);
+    let nh = Math.ceil(size.h + lh) + 2 * PIP_PAD + (w.outerHeight - w.innerHeight);
     pipScale();
+    const ow = w.outerWidth, oh = w.outerHeight, x = w.screenX, y = w.screenY;
     if (userSized) { nw = Math.max(nw, ow); nh = Math.max(nh, oh); }   // a window the person sized is only grown when the panel no longer fits, never shrunk or set back
     if (nw === ow && nh === oh) return;
     // the window keeps the screen corner it is pressed to: a plain resize holds the top left, and a window by the right or bottom
@@ -1323,8 +1144,9 @@ export function createIsland(o) {
     dismissToast();
     tipOff();
     clearTimeout(retry);
-    unframe();
-    unlater();
+    cancelAnimationFrame(frameId);
+    clearTimeout(wake);
+    frameId = 0;
     dirty = null;
     disarm();
     closePip();
@@ -1341,5 +1163,5 @@ export function createIsland(o) {
   }
   function destroy() { close(); }
 
-  return { open, close, destroy, isOpen: () => opened, pick, recording, floatForScreen, isFloating: () => !!pipWin, box: root, canvas, strokes: () => strokes.length, ink: inkOut, preview: () => !!stage, note };
+  return { open, close, destroy, isOpen: () => opened, pick, recording, floatForScreen, isFloating: () => !!pipWin, box: root, canvas, strokes: () => strokes.length, note };
 }
