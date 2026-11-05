@@ -449,7 +449,14 @@ async function trashBtn() {
     await sleep(500);
     check(h.sends.length === 0, "the bin sends nothing to the hub");
     check(await b.ev("!document.querySelector('.vfd-island')?.checkVisibility?.()"), "the bin closes the island");
-    check(await b.ev("!!document.querySelector('.vf-banner')"), "the bin shows the note that the recording is erased");
+    check(await b.ev("!!document.querySelector('.vf-banner')"), "the bin shows the note that the recording is in the bin");
+    // 05.11: the bin erased 9 minutes at once. Now the recording stays in the tab for a day, and "Undo" sends it after all
+    const kept = await b.ev("new Promise((ok) => { const q = indexedDB.open('hub-video-feedback', 1); q.onsuccess = () => { const g = q.result.transaction('rec').objectStore('rec').getAll(); g.onsuccess = () => ok(g.result.map((x) => !!x.trashed).join(',')); }; })");
+    check(kept === "true", `the recording is kept in the bin (${kept})`);
+    check(await b.ev("!!document.querySelector('.vf-banner .vf-banner-act')"), "the banner offers Undo");
+    await b.ev("document.querySelector('.vf-banner .vf-banner-act').click()");
+    await until(() => h.sends.length, "Undo sends the recording", 60000);
+    check(h.sends.length === 1 && videos(h).length === 1, "one message with the video");
   } finally { b.close(); h.close(); }
 }
 

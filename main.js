@@ -9,7 +9,7 @@
 // the text said "The video was not saved"); it is erased from the browser after the hub accepted the message.
 // UI texts and the message to the session: en by default, ru when the hub language is Russian (strings.js, picked by
 // hub.lang at use time).
-import { FRAMES, MAX_MS, VOICE, WARN_MS, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, zip } from "./lib.js";
+import { FRAMES, MAX_MS, TRASH_MS, VOICE, WARN_MS, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, triage, zip } from "./lib.js";
 import { createIsland, icon } from "./island.js";
 import { tr } from "./strings.js";
 
@@ -166,12 +166,19 @@ function bannerPut(n) {
   n.classList.toggle("vf-banner-fs", h !== document.body);
 }
 document.addEventListener("fullscreenchange", () => { const n = document.querySelector(".vf-banner"); if (n) bannerPut(n); });
-function banner(text, ms) {
+// act: {label, run} - a button after the text (the bin's "Undo")
+function banner(text, ms, act) {
   let n = document.querySelector(".vf-banner");
   if (!text) return n?.remove();
   if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); }
   bannerPut(n);
   n.textContent = text;
+  if (act) {
+    const b = hubRef.el("button", "vf-banner-act", act.label);
+    b.type = "button";
+    b.addEventListener("click", () => { n.remove(); act.run(); });
+    n.append(" ", b);
+  }
   clearTimeout(n.__t);
   if (ms) n.__t = setTimeout(() => n.remove(), ms);
 }
@@ -367,11 +374,11 @@ async function tick(r) {
 }
 
 // a phrase is over: recognize it right now, while the recording runs (by the stop almost everything is ready)
-function hear(r, cut, blob) {
+function hear(r, cut, blob, listen = true) {
   const p = { ...cut, text: "", blob };
   const i = r.list.push(p) - 1;
   blob.then((b) => { p.blob = b; return put(r, `${r.id}/p/${pad(i)}`, b); }).then(() => saveMeta(r));
-  if (!r.voice) return;
+  if (!r.voice || !listen) return;
   r.waiting.push(p);
   pump(r);
 }
@@ -506,24 +513,48 @@ async function stop() {
   }
 }
 
-// the bin: stop and erase - nothing is left in the hub or in the browser
+// the bin: stop, send nothing, keep the recording in the tab's IndexedDB for TRASH_MS - "Undo" in the banner sends it after all
+// (05.11: 9 minutes of recording were lost, the bin sits right next to the stop button). Erased on a page load after a day
+const UNDO_MS = 20000;
 async function discard() {
   const r = R;
   if (!r) return;
   if (r.phase === "count") return stop();   // the countdown is still on: same as cancel
   if (r.phase !== "rec") return;
   r.phase = "gone";
-  r.dead = true;   // late chunks and the recording description are no longer written to IndexedDB
+  r.trashed = Date.now();   // first: a reload from here on finds it in the bin, not among the recordings to send
+  const length = performance.now() - r.t0;
   r.worker.terminate();
   document.title = r.title;
-  const stops = [r.piece?.stop(), r.whole?.stop(), r.video?.stop()];
+  r.waiting = [];           // nothing more is transcribed; a phrase without text goes as audio if the recording is brought back
+  const stops = [r.whole?.stop(), r.video?.stop()];
+  if (r.an) {
+    const last = r.voiceCut.finish(length);
+    const blob = r.piece.stop();
+    if (last) hear(r, last, blob, false);
+    stops.push(blob);
+  }
   release(r);
   R = null;
   paintAll();
   await Promise.all(stops);
+  r.length = length;
+  r.stopped = true;
   await r.io;
-  await forget(r.id);
-  banner(t("discarded"), 4000);
+  await saveMeta(r);
+  banner(t("discarded"), UNDO_MS, { label: t("undo"), run: () => restore(r) });
+}
+
+// "Undo" after the bin: the recording leaves the bin and goes to its chat as an undelivered one (resume)
+async function restore(r) {
+  r.dead = true;   // a transcription still running must not write the bin mark back (its phrase goes as audio)
+  const id = r.id, ctx = r.ctx;
+  const rec = (await all("rec").catch(() => [])).find((x) => x.id === id);
+  if (!rec?.trashed || Date.now() - rec.trashed >= TRASH_MS) return banner(t("undo_gone"), 5000);
+  delete rec.trashed;
+  await keep("rec", null, rec);
+  pending = [...pending.filter((x) => x.id !== id), rec];
+  await resume(ctx);   // another recording is running: its chat's button sends it once that one is done
 }
 
 // delivery: frames, audio (if the phrases have no text), the message. The hub did not answer (restart): retry; the recording
@@ -663,11 +694,11 @@ async function resume(ctx) {
 // on page load: what was left undelivered
 async function scan() {
   try {
-    const recs = await all("rec");
-    const old = recs.filter((x) => Date.now() - x.wall > 7 * 864e5);   // the chat was not opened for a week: do not hoard
-    for (const x of old) await forget(x.id);
-    pending = recs.filter((x) => !old.includes(x)).sort((a, b) => a.wall - b.wall);
-    const live = new Set(pending.map((x) => x.id));   // chunks with no recording (deleted with the bin, not finished): erase
+    // the chat was not opened for a week, a recording lay in the bin for a day: do not hoard
+    const { expired, trash, pending: due } = triage(await all("rec"), Date.now());
+    for (const x of expired) await forget(x.id);
+    pending = due;
+    const live = new Set([...due, ...trash].map((x) => x.id));   // chunks with no recording (not finished, the bin emptied): erase
     const orphans = new Set((await tx("blob", "readonly", (st) => st.getAllKeys())).map((k) => String(k).split("/")[0]).filter((id) => !live.has(id)));
     for (const id of orphans) await forget(id);
     if (!pending.length) return;
@@ -714,7 +745,7 @@ function meta(r) {
     length: r.length ?? (r.t0 != null ? performance.now() - r.t0 : 0),
     list: r.list.map(({ from, speech, to, text }) => ({ from, speech, to, text })),
     frames: r.frames.map(({ t: at, kind, phrase, n, tag }) => ({ t: at, kind, phrase, n, ...(tag != null ? { tag } : {}) })),
-    tags: r.tags || [], drew: !!r.drew };
+    tags: r.tags || [], drew: !!r.drew, ...(r.trashed ? { trashed: r.trashed } : {}) };
 }
 const saveMeta = (r) => (r.id && !r.dead ? keep("rec", null, meta(r)) : Promise.resolve());
 

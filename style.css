@@ -240,3 +240,6 @@ html.th-clean .vfd-btn[aria-pressed="true"], html.th-clean .vfd-btn[aria-expande
 html.th-clean .vfd-toast .vfd-i, html.th-clean .vfd-toast-undo { color: var(--c-t1, var(--foreground)); }
 
 .vfd-root.vfd-paused .vfd-btn[data-tool] { opacity: .4; }   /* the pen draws on the hub tab: while it is not on screen the tools are dimmed */
+.vf-banner-act { margin-left: 8px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--radius-md, 8px);
+  background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.vf-banner-act:hover { background: color-mix(in oklch, var(--foreground) 8%, transparent); }

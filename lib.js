@@ -240,3 +240,17 @@ export const stamp = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 };
+
+// the bin keeps a recording this long (a click on the bin next to the stop button must not lose 9 minutes: 05.11), an
+// undelivered one is kept a week
+export const TRASH_MS = 864e5, KEEP_MS = 7 * 864e5;
+// recordings found in IndexedDB on page load -> {expired: erase, trash: kept in the bin, pending: send}
+export function triage(recs, now) {
+  const out = { expired: [], trash: [], pending: [] };
+  for (const x of recs) {
+    if (x.trashed) out[now - x.trashed >= TRASH_MS ? "expired" : "trash"].push(x);
+    else out[now - x.wall > KEEP_MS ? "expired" : "pending"].push(x);
+  }
+  out.pending.sort((a, b) => a.wall - b.wall);
+  return out;
+}

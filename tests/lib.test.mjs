@@ -309,3 +309,19 @@ test("isMac: by platform, not by browser", () => {
   assert.equal(isMac({}), false);
   assert.equal(isMac(null), false);
 });
+
+test("the bin keeps a recording a day: after a reload it is neither sent nor erased before that", async () => {
+  const { TRASH_MS, KEEP_MS, triage } = await import("../lib.js");   // 05.11: the bin erased 9 minutes of recording at once
+  const now = 10 * KEEP_MS;
+  const recs = [
+    { id: "a", wall: now - 60e3 },                                   // undelivered: sent
+    { id: "b", wall: now - 60e3, trashed: now - 1000 },             // in the bin: kept, not sent
+    { id: "c", wall: now - 2 * TRASH_MS, trashed: now - TRASH_MS }, // a day in the bin: erased
+    { id: "d", wall: now - KEEP_MS - 1 },                            // a week undelivered: erased
+    { id: "e", wall: now - 120e3 },
+  ];
+  const got = triage(recs, now);
+  assert.deepEqual(got.pending.map((x) => x.id), ["e", "a"]);
+  assert.deepEqual(got.trash.map((x) => x.id), ["b"]);
+  assert.deepEqual(got.expired.map((x) => x.id).sort(), ["c", "d"]);
+});
