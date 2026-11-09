@@ -123,7 +123,7 @@ export function createIsland(o) {
   // there is no way back, the island can only be closed (the window's cross or ours)
   const float = btn(o.t("draw_pip"), "pip");
   float.dataset.act = "pip";
-  float.hidden = isMac() || !globalThis.documentPictureInPicture?.requestWindow;
+  float.hidden = true;   // 0.9.19: the floating window is off for everyone (see canPip)
   // the way back: only in the window, puts the island back onto the page (the window is closed, the drawing goes on)
   const fold = btn(o.t("draw_back"), "min");
   fold.dataset.act = "min";
@@ -915,7 +915,9 @@ export function createIsland(o) {
   // Picture-in-Picture: the island in a small window of its own that the OS keeps above every other window, even over a fullscreen
   // video and over other applications. Only the island moves there: the drawing stays on the hub page (a browser cannot draw over
   // other programs). The window needs a user action (a click, letting go of the grip, the player's fullscreen button).
-  const canPip = () => !isMac() && !!globalThis.documentPictureInPicture?.requestWindow;
+  // 0.9.19: OFF. The pen cannot draw over other windows, so in the floating window it did nothing; the owner chose to switch the
+  // window off rather than keep a half-working one. The code stays for a possible return; `globalThis.__vfPip` is only for the tests.
+  const canPip = () => !!globalThis.__vfPip && !isMac() && !!globalThis.documentPictureInPicture?.requestWindow;
   const copyStyles = (to) => {
     for (const a of document.documentElement.attributes) to.documentElement.setAttribute(a.name, a.value);
     to.documentElement.classList.add("vfd-pip-doc");

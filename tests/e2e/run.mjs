@@ -1235,8 +1235,8 @@ async function fullscreen() {
 
 // a fake Document Picture-in-Picture: an off-screen iframe stands in for the window (headless Chrome has no such API).
 // gesture: it refuses like a browser without a user action
-const fakePip = (gesture) => `(() => {
-  window.__pip = null; window.__pipTries = 0;
+const fakePip = (gesture, on = true) => `(() => {
+  window.__pip = null; window.__pipTries = 0; window.__vfPip = ${on};
   Object.defineProperty(window, "documentPictureInPicture", { configurable: true, value: { requestWindow: async ({ width, height }) => {
     window.__pipTries++;
     if (${gesture} && !navigator.userActivation.isActive) throw new DOMException("needs a user action", "NotAllowedError");
@@ -1688,6 +1688,7 @@ async function realPip() {
     await view(b, 1000, 700);
     await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/${process.env.VF_PIP_QUERY || ""}` });
     await until(() => b.ev("window.__ready === true").catch(() => false), "the harness page");
+    await b.ev("window.__vfPip = true");
     const has = await b.ev("typeof window.documentPictureInPicture + ':' + typeof window.documentPictureInPicture?.requestWindow");
     console.log("documentPictureInPicture:", has);
     await b.ev(`(() => { const d = window.documentPictureInPicture; if (!d) return 0; const r = d.requestWindow.bind(d);
@@ -1738,6 +1739,7 @@ async function penInPip() {
     await b.page("Page.navigate", { url: `http://127.0.0.1:${h.port}/?bg=light` });
     await until(() => b.ev("window.__ready === true").catch(() => false), "the harness page");
     await b.page("Page.bringToFront");
+    await b.ev("window.__vfPip = true");
     check(await b.ev("typeof window.documentPictureInPicture?.requestWindow") === "function", "this Chrome has the Document PiP window");
     await b.ev(`(() => { const d = window.documentPictureInPicture, r = d.requestWindow.bind(d); d.requestWindow = async (o) => { const w = await r(o); window.__pip = w; return w; }; return 0; })()`);
     await b.page("Runtime.evaluate", { expression: "window.__root.querySelector('.vf-btn').click()", userGesture: true });
@@ -1907,7 +1909,25 @@ async function pipUser() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+async function noPip() {
+  // 0.9.19: the floating window is off on every platform (the pen cannot draw over other windows); a browser that has it changes nothing
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?bg=light&plat=win");
+    await view(b);
+    await b.ev(fakePip(false, false));
+    await record(b, 0);
+    await until(() => b.ev("!!document.querySelector('.vfd-root')"), "the island opened on the page", 10000);
+    await sleep(1500);
+    check(await b.ev("window.__pipTries") === 0, "the floating window was not requested");
+    check(await b.ev("!window.__pip"), "no floating window");
+    check(await b.ev("document.querySelector('.vfd-root [data-act=pip]')?.hidden === true"), "no float-out button");
+  } finally { b.close(); h.close(); }
+}
+
+const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
