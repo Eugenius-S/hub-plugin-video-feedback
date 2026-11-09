@@ -166,12 +166,15 @@ function bannerPut(n) {
   n.classList.toggle("vf-banner-fs", h !== document.body);
 }
 document.addEventListener("fullscreenchange", () => { const n = document.querySelector(".vf-banner"); if (n) bannerPut(n); });
-// act: {label, run} - a button after the text (the bin's "Undo")
-function banner(text, ms, act) {
+// act: {label, run} - a button after the text (the bin's "Undo"); mini: a small quiet line in the corner for progress
+// (transcribing, sending) that must not cover the chat or the field (a string is its tooltip)
+function banner(text, ms, act, mini) {
   let n = document.querySelector(".vf-banner");
   if (!text) return n?.remove();
   if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); }
   bannerPut(n);
+  n.classList.toggle("vf-banner-mini", !!mini);
+  n.title = typeof mini === "string" ? mini : "";
   n.textContent = text;
   if (act) {
     const b = hubRef.el("button", "vf-banner-act", act.label);
@@ -408,16 +411,25 @@ function progress(r) {
   if (R !== r || r.phase !== "work" || !r.voice) return;
   const all = r.list.length, done = r.list.filter((p) => p.heard).length;
   if (done >= all) return;
-  banner(t("transcribing", { done, all }));
+  banner(t("transcribing", { done, all }), 0, null, t("transcribing_note"));
   document.title = t("tab_work", { done, all });
 }
 
-// phrase -> text; the hub did not answer (restart): once more at sending
+// phrase -> text. hubRef.post does not throw: a refusal or no answer comes back as {error, status}.
+// A failure (the engine restarted, the hub was busy, no answer) is tried once more at once; still nothing - the phrase
+// waits for the retry at sending, and without text it goes as audio. 422 is silence (the hub heard no speech): an answer,
+// not a failure - the same sound gets the same answer, so no retry.
 async function transcribe(p) {
   try {
     const b = await p.blob;
-    const res = await hubRef.post("/api/voice", { data: await base64(b), mime: b.type });
-    p.text = String(res?.data?.text || "").trim();
+    const data = await base64(b);
+    for (let n = 0; n < 2; n++) {
+      const res = await hubRef.post("/api/voice", { data, mime: b.type });
+      if (!res?.error) { p.text = String(res?.data?.text || "").trim(); break; }
+      if (res.status === 422) { p.silent = true; break; }
+      if (n) break;
+      await sleep(1500);
+    }
   } catch { /* not recognized - the message will say so */ }
   p.heard = true;
 }
@@ -498,7 +510,7 @@ async function stop() {
   try {
     progress(r);
     await drained(r);
-    banner(limitNote ? `${limitNote} ${t("sending")}` : t("sending"));
+    banner(limitNote ? `${limitNote} ${t("sending")}` : t("sending"), 0, null, !limitNote);
     r.length = length;
     r.stopped = true;
     const screen = video ? await video : null;   // the whole screen video (the chunks are also in IndexedDB, in case sending breaks off)
@@ -562,12 +574,12 @@ async function restore(r) {
 async function deliver(job, ctx) {
   try {
     if (job.voice) {
-      const left = job.list.filter((p) => !p.text && p.blob);
+      const left = job.list.filter((p) => !p.text && !p.silent && p.blob);
       for (const [i, p] of left.entries()) {
-        banner(t("transcribing", { done: i, all: left.length }));
+        banner(t("transcribing", { done: i, all: left.length }), 0, null, t("transcribing_note"));
         await transcribe(p);
       }
-      if (left.length) banner(t("sending"));
+      if (left.length) banner(t("sending"), 0, null, true);
     }
     const lengths = job.list.map((p) => p.to - p.speech);
     const frames = pick(job.frames, lengths);

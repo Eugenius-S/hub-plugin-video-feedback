@@ -53,7 +53,13 @@ function newHub(opts = {}) {
         const n = ++s.voice;
         s.busy = (s.busy || 0) + 1;
         s.maxBusy = Math.max(s.maxBusy || 0, s.busy);
-        return setTimeout(() => { s.busy--; reply(200, { text: `phrase ${n}` }); }, s.voiceDelay || 0);
+        const sum = zlib.crc32 ? String(zlib.crc32(String(body.data || ""))) : String(String(body.data || "").length);
+        s.sums = s.sums || [];
+        if (s.sums.includes(sum)) s.again = (s.again || 0) + 1;
+        s.sums.push(sum);
+        if (n <= (s.voiceSilent || 0)) { s.busy--; s.quiet = (s.quiet || 0) + 1; return reply(422, { error: "no speech" }); }
+        if (n <= (s.voiceFail || 0)) { s.busy--; s.failed = (s.failed || 0) + 1; return reply(502, { error: "the engine is restarting" }); }
+        return setTimeout(() => { s.busy--; s.heard = (s.heard || 0) + 1; reply(200, { text: `phrase ${s.heard}` }); }, s.voiceDelay || 0);
       }
       if (url.pathname === "/api/upload") {
         if (s.dieOnVideo && /^screen-video/.test(body.name || "") && s.restarts < s.dieOnVideo) {
@@ -140,7 +146,7 @@ async function launch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vf-chrome-"));   // a fresh profile: the cache of an old main.js does not interfere
   const mode = process.env.VF_HEADED ? ["--window-position=60,40", "--window-size=1296,800"] : ["--headless=new"];   // VF_HEADED: a real window with the GPU
   const proc = spawn(chrome, [...mode, "--remote-debugging-port=0", `--user-data-dir=${dir}`, "--no-first-run",
-    "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required", "--disable-extensions", "about:blank"],
+    "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required", "--disable-extensions", ...(process.env.VF_FLAGS ? process.env.VF_FLAGS.split(" ") : []), "about:blank"],
   { stdio: ["ignore", "ignore", "pipe"] });
   const ws = await new Promise((ok, bad) => {
     let err = "";
@@ -338,6 +344,37 @@ async function russian() {
   } finally { b.close(); h.close(); }
 }
 
+// 5a. the engine fails on the first call (restart): that phrase is tried again at once, during the recording, not only at sending
+async function voiceRetry() {
+  const h = newHub({ voiceFail: 1 });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?pulse");
+    await record(b, 12);
+    await until(() => h.again >= 1, "the failed phrase is asked again while the recording still runs", 12000);
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(() => h.sends.length, "the message in the chat", 90000);
+    const texts = h.sends[0].text.match(/“phrase \d+”/g) || [];
+    check(h.failed === 1 && texts.length === h.heard && h.voice === 1 + h.heard, `the failed phrase was asked again, each phrase has its text (${texts.length} texts)`);
+    check(!/without text|без расшифровки/.test(h.sends[0].text), "no phrase is left without text");
+  } finally { b.close(); h.close(); }
+}
+
+// 5b. silence (the hub answers 422: no speech) is an answer: not asked again, the phrase is sent as "(no transcript)"
+async function voiceSilence() {
+  const h = newHub({ voiceSilent: 1 });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?pulse");
+    await record(b, 12);
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(() => h.sends.length, "the message in the chat", 90000);
+    check(h.quiet === 1 && !h.again, `the silent phrase was asked once (${h.quiet}), no repeats (${h.again || 0})`);
+  } finally { b.close(); h.close(); }
+}
+
 // 5. a slow transcription (a local whisper loading its model per phrase): after the stop the page says how many phrases
 // are done, the tab title too, two phrases go at once; then the message arrives and the title comes back
 async function slowVoice() {
@@ -350,8 +387,16 @@ async function slowVoice() {
     await record(b, 12);
     await b.ev("window.__root.querySelector('.vf-btn').click()");
     const said = await until(() => b.ev("document.querySelector('.vf-banner')?.textContent || ''")
-      .then((x) => (/^Transcribing phrases: \d+ of \d+/.test(x) ? x : "")), "the transcription progress on the page", 20000);
+      .then((x) => (/^◌ Transcribing \d+\/\d+$/.test(x) ? x : "")), "the transcription progress on the page", 20000);
     check(true, `the page says it: ${said.slice(0, 40)}`);
+    // the progress is a small quiet line in the corner: it covers neither the chat nor the field, and clicks pass through it
+    const box = await b.ev("(() => { const n = document.querySelector('.vf-banner'), r = n.getBoundingClientRect(), c = getComputedStyle(n); "
+      + "return JSON.stringify({ mini: n.classList.contains('vf-banner-mini'), font: parseFloat(c.fontSize), pe: c.pointerEvents, w: r.width, h: r.height, "
+      + "right: innerWidth - r.right, bottom: innerHeight - r.bottom, vw: innerWidth, title: n.title }); })()");
+    const bx = JSON.parse(box);
+    check(bx.mini && bx.font <= 13 && bx.pe === "none", `the progress is a small line that clicks pass through (${box})`);
+    check(bx.h <= 32 && bx.w <= 320 && bx.right <= 24 && bx.bottom <= 24, "it sits in the corner, one line");
+    check(/safe/.test(bx.title), "the words about the safe recording are in its tooltip");
     check(/^◌ \d+\/\d+ · transcribing$/.test(await b.ev("document.title")), "the tab title shows the progress");
     await until(() => h.sends.length, "the message in the chat", 90000);
     check(h.voice >= 4, `several phrases (${h.voice})`);
@@ -1927,7 +1972,7 @@ async function noPip() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

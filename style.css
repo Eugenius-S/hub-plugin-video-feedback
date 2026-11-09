@@ -13,6 +13,11 @@
   border: 1px solid var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / .18); font: 500 var(--text-base, 15px)/1.3 var(--font-ui, inherit);
   max-width: min(560px, 90vw); text-align: center; }
 .vf-banner.vf-banner-fs { position: absolute; top: 24px; bottom: auto; }   /* in full screen: at the top of the fullscreen element, clear of the video bar */
+/* progress that runs for a minute: a small quiet line in the corner, not over the chat or the field, clicks pass through it */
+.vf-banner.vf-banner-mini { left: auto; right: 16px; bottom: 16px; transform: none; padding: 4px 10px; border-radius: var(--radius-md, 8px);
+  box-shadow: none; font: 400 12px/1.3 var(--font-ui, inherit); color: var(--muted-foreground, var(--foreground));
+  max-width: min(320px, 70vw); pointer-events: none; opacity: .92; }
+.vf-banner.vf-banner-mini.vf-banner-fs { right: 16px; top: auto; bottom: 16px; }
 .vf-trash .icon { width: 20px; height: 20px; }
 .btn.round.vf-trash:hover { color: var(--destructive); background: color-mix(in oklch, var(--destructive) 12%, transparent); }
 

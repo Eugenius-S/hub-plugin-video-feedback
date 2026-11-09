@@ -89,8 +89,8 @@ const hub = {
     try {
       const r = await fetch(path, { method: "POST", headers: { "X-Hub": "1" }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
-      return r.ok ? { data: j } : { error: j.error || `http ${r.status}` };
-    } catch (e) { return { error: String(e) }; }
+      return r.ok ? { data: j } : { error: j.error || `http ${r.status}`, status: r.status };
+    } catch (e) { return { error: String(e), status: 0 }; }
   },
   addSlot(place, spec) { window.__slot = spec; },
 };
