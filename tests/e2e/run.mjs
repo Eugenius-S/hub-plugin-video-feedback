@@ -396,7 +396,6 @@ async function slowVoice() {
     const bx = JSON.parse(box);
     check(bx.mini && bx.font <= 13 && bx.pe === "none", `the progress is a small line that clicks pass through (${box})`);
     check(bx.h <= 32 && bx.w <= 320 && bx.right <= 24 && bx.bottom <= 24, "it sits in the corner, one line");
-    check(/safe/.test(bx.title), "the words about the safe recording are in its tooltip");
     check(/^◌ \d+\/\d+ · transcribing$/.test(await b.ev("document.title")), "the tab title shows the progress");
     await until(() => h.sends.length, "the message in the chat", 90000);
     check(h.voice >= 4, `several phrases (${h.voice})`);

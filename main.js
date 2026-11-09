@@ -167,14 +167,13 @@ function bannerPut(n) {
 }
 document.addEventListener("fullscreenchange", () => { const n = document.querySelector(".vf-banner"); if (n) bannerPut(n); });
 // act: {label, run} - a button after the text (the bin's "Undo"); mini: a small quiet line in the corner for progress
-// (transcribing, sending) that must not cover the chat or the field (a string is its tooltip)
+// (transcribing, sending) that must not cover the chat or the field
 function banner(text, ms, act, mini) {
   let n = document.querySelector(".vf-banner");
   if (!text) return n?.remove();
   if (!n) { n = hubRef.el("div", "vf-banner"); n.setAttribute("role", "status"); }
   bannerPut(n);
   n.classList.toggle("vf-banner-mini", !!mini);
-  n.title = typeof mini === "string" ? mini : "";
   n.textContent = text;
   if (act) {
     const b = hubRef.el("button", "vf-banner-act", act.label);
@@ -411,7 +410,7 @@ function progress(r) {
   if (R !== r || r.phase !== "work" || !r.voice) return;
   const all = r.list.length, done = r.list.filter((p) => p.heard).length;
   if (done >= all) return;
-  banner(t("transcribing", { done, all }), 0, null, t("transcribing_note"));
+  banner(t("transcribing", { done, all }), 0, null, true);
   document.title = t("tab_work", { done, all });
 }
 
@@ -576,7 +575,7 @@ async function deliver(job, ctx) {
     if (job.voice) {
       const left = job.list.filter((p) => !p.text && !p.silent && p.blob);
       for (const [i, p] of left.entries()) {
-        banner(t("transcribing", { done: i, all: left.length }), 0, null, t("transcribing_note"));
+        banner(t("transcribing", { done: i, all: left.length }), 0, null, true);
         await transcribe(p);
       }
       if (left.length) banner(t("sending"), 0, null, true);
