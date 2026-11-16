@@ -45,9 +45,13 @@ export default function register(hub) {
   // during a recording or sending, leaving the page asks (and an update to a new hub version waits on the data-hub-hold mark)
   addEventListener("beforeunload", (e) => { if (R && R.phase !== "count") { e.preventDefault(); e.returnValue = ""; } });
   scan();
-  hub.addSlot("composer.tools", {
+  const slot = place();
+  hub.addSlot(slot, {
     id: "rec",
-    render(root, snap, ctx) {
+    render(root, snap, raw) {
+      const ctx = slot === TOOLS ? raw : aboveCtx(raw);
+      if (!ctx) return root.replaceChildren();   // not a session chat
+      if (slot === ABOVE) root.classList.add("vf-above");
       root.__ctx = ctx;
       let b = root.__btn;
       if (!b) {
@@ -75,6 +79,36 @@ export default function register(hub) {
       if (!R) resume(ctx).catch(() => {});
     },
   });
+}
+
+// Where the button stands. This hub's build has the composer.tools slot, the row of the input field before the microphone, with
+// ctx { key, send } (capability composerTools; an older build of it shows only the slot name in ext.js SLOTS). The shared hub
+// (1.9.4) has neither: there the button stands above the input (session.composer, ctx { session }) and the recording goes as an
+// owner message through hub.send (API 1.28) or POST /api/send
+const TOOLS = "composer.tools", ABOVE = "session.composer";
+const SLOTS = await import("/static/js/ext.js").then((m) => m.SLOTS || {}, () => ({}));
+function place() {
+  return hubRef.capabilities?.composerTools === 1 || SLOTS[TOOLS] ? TOOLS : ABOVE;
+}
+
+// ctx of the composer.tools slot made from the session.composer one: the key of the chat and send as the input field sends
+// (to this session; a worker that handed in is woken). One client id per text: a retry after "no answer" is the same message
+// for the core, not a second one
+const cids = new Map();
+function aboveCtx(raw) {
+  const s = raw?.session;
+  if (!s?.name) return null;
+  const send = (text, metas) => {
+    const body = { session: s.name, text: String(text || ""), attachments: metas || [] };
+    if (s.state === "asleep" && s.retired) body.wake = true;
+    if (typeof hubRef.send !== "function") return hubRef.post("/api/send", body);
+    if (!cids.has(body.text)) cids.set(body.text, `vf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+    return hubRef.send({ ...body, client_id: cids.get(body.text) }).then((r) => {
+      if (r?.ok) cids.delete(body.text);
+      return r?.ok ? r : { ...r, error: r?.error || r?.receipt || "not sent" };
+    });
+  };
+  return { key: s.name, session: s, send };
 }
 
 function paint(b) {

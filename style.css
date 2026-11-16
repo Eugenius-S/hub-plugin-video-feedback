@@ -248,3 +248,5 @@ html.th-clean .vfd-toast .vfd-i, html.th-clean .vfd-toast-undo { color: var(--c-
 .vf-banner-act { margin-left: 8px; padding: 2px 10px; border: 1px solid var(--border); border-radius: var(--radius-md, 8px);
   background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .vf-banner-act:hover { background: color-mix(in oklch, var(--foreground) 8%, transparent); }
+/* the shared hub has no slot in the input row: the buttons stand in a row above the input, at its right edge */
+.vf-above { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-1, 4px); padding: 0 var(--space-2, 8px); }

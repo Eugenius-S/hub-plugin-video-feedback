@@ -228,6 +228,30 @@ async function normal() {
   } finally { b.close(); h.close(); }
 }
 
+// 1d. the shared hub (1.9.4, no composer.tools): the button stands above the input (session.composer), the recording goes as an
+// owner message through hub.send to the open session, with the video and the frames, one message
+async function sharedCore() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?core=release");
+    check(await b.ev("window.__place") === "session.composer", "the button asks for the slot above the input");
+    check(await b.ev("!!window.__root.querySelector('.vf-btn')"), "the camera button is drawn");
+    await record(b, 4);
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(() => h.sends.length, "the message in the chat");
+    const m = h.sends[0];
+    check(m.session === "chat", `it goes to the open session (${m.session})`);
+    check(typeof m.client_id === "string" && m.client_id, "with a client id (the core drops a repeat of it)");
+    check(m.text.startsWith("Video feedback, "), "the text is the recording's");
+    check(Array.isArray(m.attachments) && m.attachments.length > 0, `the frames go as attachments (${m.attachments?.length})`);
+    const vids = videos(h);
+    check(vids.length === 1 && m.text.includes(vids[0].path), "the video path is in the text");
+    check(h.sends.length === 1, "one message");
+  } finally { b.close(); h.close(); }
+}
+
 // 1c. the recording limit: a minute before it the island warns, at the limit the recording stops and says so (the time is moved, not waited for)
 async function limit() {
   const h = newHub();
@@ -1971,7 +1995,7 @@ async function noPip() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, sharedCore, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
