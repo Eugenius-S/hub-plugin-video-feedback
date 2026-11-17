@@ -116,7 +116,14 @@ if (Q.has("fs")) {
 const { default: register } = await import("/main.js");
 register(hub);
 const root = document.createElement("div");
-document.body.append(root);
+// ?dock (with ?core=release): the root in the dock as the shared page puts it — in .slot-host.composer above the input form,
+// whose bottom row is the core's (spacer, mic) and is redrawn by the core without the plugin's nodes
+if (RELEASE && Q.has("dock")) {
+  document.body.insertAdjacentHTML("beforeend", `<div class="dock-inner"><div class="slot-host composer"></div>
+    <form class="composer"><textarea></textarea><div class="bar"><span class="spacer"></span><button type="button" class="btn round mic">m</button></div></form></div>`);
+  root.className = "slot slot-session-composer";
+  document.querySelector(".slot-host.composer").append(root);
+} else document.body.append(root);
 const ctx = RELEASE ? { session: { name: "chat", state: "idle" } } : { key: "chat", send: (text, metas) => hub.post("/__send", { text, metas }) };
 window.__ctx = ctx;
 window.__root = root;

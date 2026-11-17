@@ -32,7 +32,7 @@ Video feedback spends noticeably more tokens than text. A minute of recording co
 
 Settings -> Plugins -> paste the link to this repository -> "Check and install". Required:
 
-- a hub with the `composer.tools` slot (a button in the input field) - an addition to the Plugin API, not in the common hub yet: without it the icon does not appear;
+- a hub page with a chat input: the icon stands in the input's row before the microphone (the `composer.tools` slot where the hub has it; on the shared hub the plugin puts it there itself through `session.composer`);
 - the hub's Voice module (`voice.cmd` in hub.json) - the same one the microphone uses; if it is not set up, the hub sets up speech transcription by itself when the plugin is installed (`"needs": ["voice"]`, `hub voice setup`), and while it is being installed only frames go out;
 - Chrome or Edge on a computer (a phone cannot record the screen, so there is no icon either). On macOS the browser needs the "Screen Recording" permission once, in "Privacy & Security".
 

@@ -252,6 +252,40 @@ async function sharedCore() {
   } finally { b.close(); h.close(); }
 }
 
+// 1e. the shared hub's dock: the camera stands in the field's bottom row before the mic, not in a card of its own above the
+// field (Clean draws session.composer's host as a card): the slot root stays empty and the host is not shown; the core's
+// redraw of the row drops the button and it comes back; a new snapshot draws no second one
+async function fieldRow() {
+  const h = newHub();
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?core=release&dock");
+    const where = `(() => { const bar = document.querySelector("form.composer > .bar"), k = [...bar.children];
+      const btn = document.querySelectorAll(".vf-btn"), host = document.querySelector(".slot-host.composer");
+      return { n: btn.length, inBar: !!btn[0]?.closest(".bar"), beforeMic: k.indexOf(btn[0]?.closest(".bar > *")) === k.indexOf(bar.querySelector(".mic")) - 1,
+        afterSpacer: k.indexOf(btn[0]?.closest(".bar > *")) > k.indexOf(bar.querySelector(".spacer")),
+        rootEmpty: !window.__root.childElementCount, hostShown: host.getClientRects().length > 0 }; })()`;
+    let w = await b.ev(where);
+    check(w.n === 1 && w.inBar && w.beforeMic && w.afterSpacer, "the camera is in the field's row, after the spacer, before the mic " + JSON.stringify(w));
+    check(w.rootEmpty && !w.hostShown, "the slot above the field is empty and its host is not shown " + JSON.stringify(w));
+    await b.ev("(() => { const bar = document.querySelector('form.composer > .bar'); bar.replaceChildren(bar.querySelector('.spacer'), bar.querySelector('.mic')); return 0; })()");
+    await sleep(50);
+    w = await b.ev(where);
+    check(w.n === 1 && w.inBar && w.beforeMic, "after the core redraws the row the camera is back in it " + JSON.stringify(w));
+    await b.ev("window.__slot.render(window.__root, { voice: true }, window.__ctx); 0");
+    await sleep(50);
+    w = await b.ev(where);
+    check(w.n === 1 && w.inBar && w.beforeMic && w.rootEmpty, "a new snapshot draws no second camera " + JSON.stringify(w));
+    await b.ev("document.querySelector('.vf-btn').click()");
+    await until(async () => (await phase(b)) === "rec", "the camera in the row starts a recording", 20000);
+    await sleep(3000);
+    await b.ev("document.querySelector('.vf-btn').click()");
+    await until(() => h.sends.length, "the message in the chat");
+    check(h.sends.length === 1 && h.sends[0].session === "chat", "one message to the open session");
+  } finally { b.close(); h.close(); }
+}
+
 // 1c. the recording limit: a minute before it the island warns, at the limit the recording stops and says so (the time is moved, not waited for)
 async function limit() {
   const h = newHub();
@@ -1995,7 +2029,7 @@ async function noPip() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, sharedCore, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, sharedCore, fieldRow, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;

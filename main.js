@@ -12,6 +12,7 @@
 import { FRAMES, MAX_MS, TRASH_MS, VOICE, WARN_MS, bundles, clock, frameName, message, phrases, pick, sentSummary, stamp, triage, zip } from "./lib.js";
 import { createIsland, icon } from "./island.js";
 import { tr } from "./strings.js";
+import { fieldHolder } from "./fieldrow.js";
 
 const COUNT = 3;
 // Motion Gallery (a separate plugin) serves its catalog on the hub port + 12; it is asked only from a local page
@@ -50,8 +51,10 @@ export default function register(hub) {
     id: "rec",
     render(root, snap, raw) {
       const ctx = slot === TOOLS ? raw : aboveCtx(raw);
-      if (!ctx) return root.replaceChildren();   // not a session chat
+      if (!ctx) { root.__fieldHolder?.replaceChildren(); return root.replaceChildren(); }   // not a session chat
       if (slot === ABOVE) root.classList.add("vf-above");
+      // the shared core: the button stands in the field's row before the mic (fieldrow.js), not in a card above the field
+      const box = slot === ABOVE ? fieldHolder(root, { cls: "vf-in-field", order: 10 }) : root;
       root.__ctx = ctx;
       let b = root.__btn;
       if (!b) {
@@ -71,7 +74,7 @@ export default function register(hub) {
         b.__pen.hidden = true;
         b.__pen.append(pen());
         b.__pen.addEventListener("click", () => { if (R) { R.island?.open(); R.island?.floatForScreen?.(inButtons); } });
-        root.append(b.__pen, b.__trash, b);
+        box.append(b.__pen, b.__trash, b);
         root.__btn = b;
       }
       buttons.set(ctx.key, b);
