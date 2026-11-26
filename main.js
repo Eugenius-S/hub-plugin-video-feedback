@@ -95,19 +95,15 @@ function place() {
 }
 
 // ctx of the composer.tools slot made from the session.composer one: the key of the chat and send as the input field sends
-// (to this session; a worker that handed in is woken). One client id per text: a retry after "no answer" is the same message
-// for the core, not a second one
-const cids = new Map();
+// (to this session; a worker that handed in is woken). The saved recording ID keeps retries deduplicated across reloads.
 function aboveCtx(raw) {
   const s = raw?.session;
   if (!s?.name) return null;
-  const send = (text, metas) => {
-    const body = { session: s.name, text: String(text || ""), attachments: metas || [] };
+  const send = (text, metas, client_id) => {
+    const body = { session: s.name, text: String(text || ""), attachments: metas || [], client_id };
     if (s.state === "asleep" && s.retired) body.wake = true;
     if (typeof hubRef.send !== "function") return hubRef.post("/api/send", body);
-    if (!cids.has(body.text)) cids.set(body.text, `vf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
-    return hubRef.send({ ...body, client_id: cids.get(body.text) }).then((r) => {
-      if (r?.ok) cids.delete(body.text);
+    return hubRef.send(body).then((r) => {
       return r?.ok ? r : { ...r, error: r?.error || r?.receipt || "not sent" };
     });
   };
@@ -686,7 +682,7 @@ async function deliver(job, ctx) {
     const text = message({ length: job.length, phrases: job.list, frames, voice: job.voice, audio: sent.audio,
       cut: !job.stopped, video: sent.video || null, tags: job.tags || [], drew: !!job.drew,
       archive: sent.archive?.length ? { paths: sent.archive, count: job.frames.length } : null, lang: lang() });
-    await again(() => ctx.send(text, sent.metas), (x) => x && !x.error);
+    await again(() => ctx.send(text, sent.metas, `vf-${job.id}`), (x) => x && !x.error);
     await forget(job.id);
     pending = pending.filter((x) => x.id !== job.id);
     const sum = sentSummary(job.list.length, sent.archive?.length ? job.frames.length : frames.length, lang());
