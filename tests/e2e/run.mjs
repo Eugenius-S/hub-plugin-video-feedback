@@ -75,6 +75,7 @@ function newHub(opts = {}) {
       if (url.pathname === "/__send") {
         if (s.failSends) { s.failSends--; return reply(503, { error: "hub busy" }); }
         s.sends.push(body);
+        if (s.holdFirstSend && s.sends.length === 1) return;   // accepted, but its receipt did not reach the tab
         return reply(200, { ok: true });
       }
       reply(404, { error: "not found" });
@@ -249,6 +250,30 @@ async function sharedCore() {
     const vids = videos(h);
     check(vids.length === 1 && m.text.includes(vids[0].path), "the video path is in the text");
     check(h.sends.length === 1, "one message");
+  } finally { b.close(); h.close(); }
+}
+
+// The core accepted the send before the page reloaded. The resumed recording must use the same client ID.
+async function reloadAfterAccept() {
+  const h = newHub({ holdFirstSend: true });
+  await h.listen();
+  const b = await launch();
+  try {
+    await load(b, h, "?core=release");
+    await record(b, 2);
+    await b.ev("window.__root.querySelector('.vf-btn').click()");
+    await until(() => h.sends.length === 1, "the first message accepted without a receipt");
+    await load(b, h, "?core=release");
+    await until(async () => {
+      // The real page redraws the plugin slot as the chat updates.
+      await b.ev("window.__slot.render(window.__root, { voice: true }, window.__ctx); 0");
+      return h.sends.length >= 2;
+    }, "the recording retried after the reload", 15000);
+    const [first, retry] = h.sends;
+    check(first.client_id && retry.client_id === first.client_id, "the retry kept the original client ID");
+    check(first.session === retry.session, "the retry kept the original destination");
+    check(videos(h).length === 1, "the video was uploaded once");
+    await until(async () => !(await held(b)), "the page is released after delivery", 10000);
   } finally { b.close(); h.close(); }
 }
 
@@ -2029,7 +2054,7 @@ async function noPip() {
   } finally { b.close(); h.close(); }
 }
 
-const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, sharedCore, fieldRow, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
+const cases = { noPip, macNoPip, limit, pipUser, collapse, collapsePip, realPip, penInPip, nativeButton, trashBtn, normal, sharedCore, reloadAfterAccept, fieldRow, stopAnywhere, restartMidSend, reloadMidRecording, russian, slowVoice, voiceRetry, voiceSilence, drawTools, ink, inkPick, shots, stopWhileCropping, closePen, place, theme, cleanTheme, tagMg, noGallery, confine, fullscreen, away, narrowPip, diaPip, pipFixed, pipOnScreen, galleryClose, smooth };
 let failed = 0;
 for (const [name, fn] of Object.entries(cases)) {
   if (only && only !== name) continue;
